@@ -5,9 +5,9 @@ $vsVersion = $Version
 if ($Help) {
     Write-Output @'
 VoiceStudio Electron installer (Windows x64 and ARM64)
-  irm https://voicestudio.sh/install | iex
-  $env:VOICESTUDIO_VERSION='X.Y.Z'; irm https://voicestudio.sh/install | iex
-  $env:VOICESTUDIO_INSTALL_MODE='main'; irm https://voicestudio.sh/install | iex
+  irm https://voicestudio.sh/install.ps1 | iex
+  $env:VOICESTUDIO_VERSION='X.Y.Z'; irm https://voicestudio.sh/install.ps1 | iex
+  $env:VOICESTUDIO_INSTALL_MODE='main'; irm https://voicestudio.sh/install.ps1 | iex
 File usage: .\install.ps1 [-Version X.Y.Z] [-Main | -Source] [-Silent]
 Uninstall: .\install.ps1 -Uninstall (preserves user data)
   $env:VOICESTUDIO_INSTALL_MODE='uninstall'; irm https://voicestudio.sh/install.ps1 | iex
@@ -61,7 +61,7 @@ $work = Join-Path ([IO.Path]::GetTempPath()) ('voicestudio-install-' + [Guid]::N
 New-Item -ItemType Directory -Path $work | Out-Null
 try {
     if ($mode -eq 'main') {
-        foreach ($tool in @('git', 'node', 'bun', 'cargo')) {
+        foreach ($tool in @('git', 'node', 'bun', 'cargo', 'uv')) {
             if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Main builds require $tool; see docs/install/script.md." }
         }
         Run-Checked node @('-e', 'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)')

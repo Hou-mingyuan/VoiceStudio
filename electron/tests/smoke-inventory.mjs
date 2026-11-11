@@ -6,6 +6,7 @@ import { join } from 'node:path';
  * smoke is either run by CI or consciously parked here.
  */
 export const OTHER_SMOKES = {
+  'cli-bundle-smoke.mjs': 'packages the terminal command with uv into fixture apps; run with node',
   'renderer-smoke.vite.config.mjs': 'Vite config for the smoke server, not a test',
   'runtime-install-smoke.mjs': 'drives the runtime installer directly with node',
   'native-output-smoke.ts': 'native helper check run with the Rust helper built',
@@ -15,6 +16,9 @@ export const OTHER_SMOKES = {
 };
 
 const SMOKE_FILE = /smoke(\..*)?\.(mjs|ts)$/;
+
+/** Shared harness that launches Chromium and mocks /api for renderer smokes. */
+export const RENDERER_HELPER = 'smoke-api-mock.mjs';
 
 /**
  * What a smoke needs in order to run:
@@ -27,7 +31,7 @@ const SMOKE_FILE = /smoke(\..*)?\.(mjs|ts)$/;
 export function classifySmoke(file, source) {
   if (file.includes('-real-smoke.')) return 'real-backend';
   if (source.includes('_electron')) return 'electron';
-  if (/\bchromium\b/.test(source)) return 'renderer';
+  if (/\bchromium\b/.test(source) || source.includes(`'./${RENDERER_HELPER}'`)) return 'renderer';
   if (Object.hasOwn(OTHER_SMOKES, file)) return 'other';
   return 'unknown';
 }

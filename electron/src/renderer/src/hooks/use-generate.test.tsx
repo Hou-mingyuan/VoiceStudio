@@ -34,15 +34,19 @@ const engine = vi.hoisted(() => ({
   cloning: undefined as boolean | null | undefined,
   presets: undefined as string[] | undefined,
   emotion: undefined as boolean | undefined,
+  caps: undefined as { emotion: 'graded' | 'direction' | 'none'; tags: string[] } | undefined,
 }));
 vi.mock('./use-engines', () => ({
   useEngines: () => ({
     activeTts: {
+      id: 'omnivoice',
+      effective_device: 'cuda',
       instruct_vocabulary: engine.vocabulary,
       supports_voice_design: engine.design,
       supports_cloning: engine.cloning,
       preset_voices: engine.presets,
       supports_emotion: engine.emotion,
+      expression_caps: engine.caps,
     },
   }),
 }));
@@ -273,26 +277,23 @@ it('attributes generation to an explicitly selected designed voice', async () =>
 });
 
 it.each([
-  ['freeform', 'raspy old female, scottish accent', 'freeform'],
-  [undefined, '', 'tags'],
+  ['freeform', 'a weary sea captain, slow', 'a weary sea captain, slow'],
+  [undefined, 'a weary sea captain, slow', ''],
 ] as const)(
-  'forwards design prose only to free-form engines (#2389, %s)',
-  async (vocabulary, sent, expectedVocabulary) => {
+  'generateDesign with vocabulary %s forwards the right instruct',
+  async (vocabulary, written, sent) => {
     engine.vocabulary = vocabulary;
-    vi.mocked(generateClone).mockReset().mockRejectedValueOnce(new Error('stop'));
+    vi.mocked(generateClone).mockReset().mockRejectedValue(new Error('stop'));
+    const recipe = { description: written, picks: {} };
     function DesignConsumer() {
       const state = useGenerateClone();
       return (
         <button
           onClick={() =>
-            void state.generateDesign({
-              text: 'Hi',
-              instruct: 'raspy old female, scottish accent',
-              seed: 1,
-            })
+            void state.generateDesign({ text: 'Hi', instruct: `  ${written} `, seed: 1, recipe })
           }
         >
-          design {state.instructVocabulary}
+          vocabulary {state.instructVocabulary}
         </button>
       );
     }
@@ -303,10 +304,15 @@ it.each([
         </GenerationProvider>
       </QueryClientProvider>,
     );
-    fireEvent.click(screen.getByText('design ' + expectedVocabulary));
+    const expected = vocabulary ?? 'tags';
+    fireEvent.click(screen.getByText(`vocabulary ${expected}`));
     await waitFor(() => expect(generateClone).toHaveBeenCalled());
     expect(generateClone).toHaveBeenCalledWith(
-      expect.objectContaining({ instruct: sent, instructVocabulary: expectedVocabulary }),
+      expect.objectContaining({
+        instruct: sent,
+        instructVocabulary: expected,
+        designRecipe: recipe,
+      }),
       expect.anything(),
     );
     engine.vocabulary = undefined;
@@ -314,33 +320,37 @@ it.each([
 );
 
 it.each([
-  [false, 'design', false],
-  [null, 'none', true],
-  [true, 'none', true],
+  [false, 'design', false, false],
+  [null, 'none', true, true],
+  [true, 'none', true, true],
 ] as const)(
-  'blocks Voice Design on an engine that declares it cannot design (supports_voice_design=%s)',
-  async (design, expectedBlocker, sends) => {
-    engine.design = design;
-    vi.mocked(generateClone).mockReset().mockRejectedValue(new Error('stop'));
-    function DesignConsumer() {
+  'uses the declared Voice Design capability %s',
+  async (capability, expectedBlocker, expectedAllowed, sends) => {
+    engine.design = capability;
+    vi.mocked(generateClone).mockReset().mockRejectedValue(new Error('request ended'));
+    function CapabilityConsumer() {
       const state = useGenerateClone();
       return (
         <button
-          onClick={() => void state.generateDesign({ text: 'Hi', instruct: 'male', seed: 1 })}
+          onClick={() =>
+            void state.generateDesign({ text: 'Capability check', instruct: 'calm', seed: 19 })
+          }
         >
-          blocker {state.designBlocker ?? 'none'} {String(state.canGenerateDesign)}
+          {state.designBlocker ?? 'none'}:{String(state.canGenerateDesign)}
         </button>
       );
     }
     render(
       <QueryClientProvider client={new QueryClient()}>
         <GenerationProvider>
-          <DesignConsumer />
+          <CapabilityConsumer />
         </GenerationProvider>
       </QueryClientProvider>,
     );
-    const button = screen.getByText(`blocker ${expectedBlocker} ${String(sends)}`);
-    fireEvent.click(button);
+    const action = screen.getByRole('button', {
+      name: `${expectedBlocker}:${String(expectedAllowed)}`,
+    });
+    fireEvent.click(action);
     if (sends) await waitFor(() => expect(generateClone).toHaveBeenCalled());
     else {
       await act(async () => {});
@@ -443,6 +453,44 @@ it.each([
     engine.cloning = undefined;
   },
 );
+
+it.each([
+  ['the stored transcript unchanged', 'Stored words.', undefined],
+  ['a manual correction', 'Corrected words.', 'Corrected words.'],
+  ['a blank field', '   ', undefined],
+])('sends a saved voice %s only as a manual override', async (_label, refText, expected) => {
+  patchCloneSettings({
+    text: 'Clone script',
+    selectedProfileId: 'saved',
+    refText,
+    autoPlay: false,
+  });
+  vi.mocked(generateClone).mockClear().mockRejectedValueOnce(new Error('stop after request'));
+  const client = new QueryClient();
+  client.setQueryData(queryKeys.profiles, [{ id: 'saved', ref_text: 'Stored words.' } as Profile]);
+  function CloneConsumer() {
+    const state = useGenerateClone();
+    return (
+      <>
+        <button onClick={() => void state.generate()}>clone ref test</button>
+        <span>{state.error}</span>
+      </>
+    );
+  }
+  render(
+    <QueryClientProvider client={client}>
+      <GenerationProvider>
+        <CloneConsumer />
+      </GenerationProvider>
+    </QueryClientProvider>,
+  );
+  fireEvent.click(screen.getByText('clone ref test'));
+  await screen.findByText('stop after request');
+  expect(generateClone).toHaveBeenCalledWith(
+    expect.objectContaining({ profileId: 'saved', refText: expected }),
+    expect.anything(),
+  );
+});
 
 it.each([
   [false, ''],
@@ -587,3 +635,192 @@ it.each([
     engine.emotion = undefined;
   },
 );
+
+it.each([
+  ['CosyVoice (direction)', 'direction', false, 'warm, intimate'],
+  ['OmniVoice after switching back (#3422)', 'none', false, 'warm'],
+  ['Voice Design', 'direction', true, 'male'],
+] as const)(
+  'sends the delivery direction only where instruct steers a clone (%s)',
+  async (_name, emotion, design, instruct) => {
+    engine.vocabulary = 'freeform';
+    engine.design = true;
+    engine.caps = { emotion, tags: [] };
+    patchCloneSettings({
+      text: 'A cloned voice line.',
+      selectedProfileId: 'speaker-direction',
+      instruct: 'warm',
+      direction: '  intimate  ',
+      emotionMode: 'none',
+    });
+    vi.mocked(generateClone).mockReset().mockRejectedValue(new Error('stop'));
+
+    function DirectionConsumer() {
+      const generation = useGenerateClone();
+      return (
+        <button
+          onClick={() =>
+            void (design
+              ? generation.generateDesign({ text: 'A designed voice.', instruct: 'male' })
+              : generation.generate())
+          }
+        >
+          direction render
+        </button>
+      );
+    }
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <GenerationProvider>
+          <DirectionConsumer />
+        </GenerationProvider>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByText('direction render'));
+    await waitFor(() => expect(generateClone).toHaveBeenCalled());
+    expect(vi.mocked(generateClone).mock.calls[0][0].instruct).toBe(instruct);
+    engine.vocabulary = undefined;
+    engine.design = undefined;
+    engine.caps = undefined;
+  },
+);
+
+it.each([['clone', false], ['design', false], ['clone', true], ['design', true]] as const)(
+  'clears the %s synthesis banner after acceptance (close while pending: %s)',
+  async (mode, closeWhilePending) => {
+    const { ApiError, apiJson } = await import('@/lib/api/client');
+    const { announceModelLicenceRequired } = await import('@/features/settings/model-license-contract');
+    const { ModelLicenceGate } = await import('@/features/settings/model-licence-acceptance');
+    const { default: en } = await import('@/i18n/locales/en.json');
+    const { createInstance } = await import('i18next');
+    const { I18nextProvider } = await import('react-i18next');
+    const i18n = createInstance();
+    await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+    const models = [
+      { repo_id: 'test/voice', fingerprint: 'voice-terms', category: 'noncommercial' },
+      { repo_id: 'test/tokenizer', fingerprint: 'tokenizer-terms', category: 'conditions' },
+    ];
+    const accepted = new Set<string>();
+    let releaseAcceptance!: () => void;
+    const acceptanceReady = new Promise<void>((resolve) => { releaseAcceptance = resolve; });
+    if (!closeWhilePending) releaseAcceptance();
+    vi.mocked(apiJson).mockImplementation(async (path, init) => {
+      if (path === '/models/licenses/accept') {
+        await acceptanceReady;
+        const body = JSON.parse(String(init?.body));
+        accepted.add(body.repo_id);
+        return { ...body, accepted: true };
+      }
+      if (path.startsWith('/models/licenses/details/')) {
+        const model = models.find((item) => path.endsWith(item.repo_id))!;
+        return {
+          repo_id: model.repo_id,
+          info: { license: 'Test licence', credit: 'Test holder', license_category: model.category },
+          acceptance: { ...model, required: true, accepted: accepted.has(model.repo_id) },
+          history: [],
+        };
+      }
+      return modelStatus.value;
+    });
+    patchCloneSettings({ text: 'Hello', selectedProfileId: 'voice-1', autoPlay: false });
+    vi.mocked(generateClone).mockReset().mockImplementationOnce(async () => {
+      const payload = { detail: { code: 'model_licence_required', models } };
+      announceModelLicenceRequired(payload);
+      throw new ApiError(403, en.modelLicense.requiredError, payload);
+    });
+    function Synthesis() {
+      const state = useGenerateClone();
+      return <>
+        <button onClick={() => void (mode === 'clone'
+          ? state.generate()
+          : state.generateDesign({ text: 'Hello', instruct: 'male' }))}>Synthesize test</button>
+        {state.error && <p role="alert">{state.error}</p>}
+      </>;
+    }
+    const view = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <I18nextProvider i18n={i18n}>
+          <GenerationProvider><Synthesis /><ModelLicenceGate /></GenerationProvider>
+        </I18nextProvider>
+      </QueryClientProvider>,
+    );
+    try {
+      fireEvent.click(screen.getByText('Synthesize test'));
+      await screen.findByText(en.modelLicense.requiredError);
+      const boxes = await screen.findAllByRole('checkbox');
+      await waitFor(() => expect(boxes[0]).not.toBeDisabled());
+      for (const box of boxes) fireEvent.click(box);
+      fireEvent.click(screen.getByRole('button', { name: en.modelLicense.acceptAll.replace('{{count}}', '2') }));
+      if (closeWhilePending) {
+        fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape', code: 'Escape' });
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+        expect(screen.getByText(en.modelLicense.requiredError)).toBeInTheDocument();
+        releaseAcceptance();
+      }
+      await waitFor(() => expect(accepted.size).toBe(2));
+      await waitFor(() => expect(screen.queryByText(en.modelLicense.requiredError)).not.toBeInTheDocument());
+      if (!closeWhilePending) fireEvent.click(screen.getByRole('button', { name: en.common.close }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(generateClone).toHaveBeenCalledOnce();
+    } finally {
+      view.unmount();
+      vi.mocked(apiJson).mockImplementation(() => Promise.resolve(modelStatus.value));
+    }
+  },
+);
+
+it.each([
+  ['records a warm take', { status: 'ready', loading: false }, 1],
+  ['skips a take that waited for model loading', { status: 'loading', loading: true }, 0],
+] as const)('measures render speed locally per engine and device (%s)', async (_name, status, count) => {
+  modelStatus.value = { ...status };
+  localStorage.removeItem('voicestudio.render-speed.v1');
+  patchCloneSettings({
+    text: 'A cloned voice line long enough to measure.',
+    selectedProfileId: 'speaker-speed',
+    steps: null,
+    autoPlay: false,
+  });
+  vi.mocked(generateClone)
+    .mockReset()
+    .mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                id: `take-speed-${count}`,
+                durationSeconds: 3,
+                genTimeSeconds: 9,
+              } as Awaited<ReturnType<typeof generateClone>>),
+            50,
+          ),
+        ),
+    );
+  const client = new QueryClient();
+  client.setQueryData(queryKeys.engines, { tts: { active: 'omnivoice', backends: [] } });
+  render(
+    <QueryClientProvider client={client}>
+      <GenerationProvider>
+        <Consumer name={`speed-${count}`} />
+      </GenerationProvider>
+    </QueryClientProvider>,
+  );
+  fireEvent.click(screen.getByText(`speed-${count}:idle`));
+  await waitFor(() => {
+    const takes = JSON.parse(localStorage.getItem('voicestudio.take-settings.v1') ?? '{}');
+    // The take keeps the steps it rendered with, not "best for whatever engine is active".
+    expect(takes[`take-speed-${count}`]?.steps).toBe(32);
+  });
+  expect(vi.mocked(generateClone).mock.calls[0][0].steps).toBe(32);
+  const stored = JSON.parse(localStorage.getItem('voicestudio.render-speed.v1') ?? '{}');
+  expect(stored['omnivoice|cuda'] ?? []).toHaveLength(count);
+  if (count)
+    expect(stored['omnivoice|cuda'][0]).toMatchObject({
+      chars: 43,
+      audioSeconds: 3,
+      renderSeconds: 9,
+      steps: 32,
+    });
+});

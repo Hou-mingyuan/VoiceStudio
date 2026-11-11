@@ -1,7 +1,6 @@
 import {
   existsSync,
   chmodSync,
-  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -18,6 +17,7 @@ import { describe, expect, it, vi } from 'vitest';
 // This is a Node launcher shared with the package script, so it intentionally
 // remains plain ESM rather than being compiled into Electron's main process.
 import {
+  MAC_TOOLS,
   createMacDevBundlePlan,
   launchElectronVite,
   prepareMacDevElectron,
@@ -46,6 +46,54 @@ it('watches main and preload changes so renderer updates cannot leave stale brow
   } finally {
     Object.defineProperty(process, 'platform', platform);
   }
+});
+
+describe('built-app launches (bun run start / preview)', () => {
+  it('routes every Electron-launching package script through the resolving launcher', () => {
+    const manifest = JSON.parse(readFileSync(join(__dirname, '../../package.json'), 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+    const { scripts } = manifest;
+    const direct = Object.entries(scripts).filter(([, command]) =>
+      /electron-vite\s+(dev|preview)\b/.test(command),
+    );
+    expect(direct).toEqual([]);
+    expect(scripts.start).toBe('node scripts/dev.mjs preview');
+    expect(scripts.preview).toBe('node scripts/dev.mjs preview');
+  });
+
+  it('previews the built app with a resolved binary and without watching', () => {
+    const spawn = vi.fn(() => ({ on: vi.fn() }));
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const previousExecutable = process.env.ELECTRON_EXEC_PATH;
+    const previousRunAsNode = process.env.ELECTRON_RUN_AS_NODE;
+    delete process.env.ELECTRON_EXEC_PATH;
+    process.env.ELECTRON_RUN_AS_NODE = '1';
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    try {
+      launchElectronVite(
+        ['preview', '--', '--disable-gpu'],
+        spawn,
+        () => '/electron/dist/electron',
+      );
+      const [, args, options] = spawn.mock.calls[0] as unknown as [
+        string,
+        string[],
+        { env: NodeJS.ProcessEnv },
+      ];
+      expect(args.slice(1)).toEqual(['preview', '--', '--disable-gpu']);
+      expect(options.env.ELECTRON_EXEC_PATH).toBe('/electron/dist/electron');
+      // An inherited ELECTRON_RUN_AS_NODE would start the app as plain Node.
+      expect(options.env).not.toHaveProperty('ELECTRON_RUN_AS_NODE');
+      expect(process.env.ELECTRON_RUN_AS_NODE).toBe('1');
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+      if (previousExecutable === undefined) delete process.env.ELECTRON_EXEC_PATH;
+      else process.env.ELECTRON_EXEC_PATH = previousExecutable;
+      if (previousRunAsNode === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
+      else process.env.ELECTRON_RUN_AS_NODE = previousRunAsNode;
+    }
+  });
 });
 
 describe('Electron binary resolution', () => {
@@ -150,10 +198,37 @@ describe('macOS development bundle branding', () => {
   });
 });
 
+it('calls the macOS system tools by absolute path, never whatever PATH finds first (#3813)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vs-dev-tools-'));
+  try {
+    const icon = join(dir, 'icon.icns');
+    writeFileSync(icon, 'icon');
+    const commands: string[] = [];
+    prepareMacDevElectron({
+      electronExecutable: join(dir, 'src', 'Electron.app', 'Contents', 'MacOS', 'Electron'),
+      electronVersion: '44.3.0',
+      appVersion: '0.5.6',
+      iconPath: icon,
+      cacheRoot: join(dir, 'cache'),
+      runCommand(command: string, args: string[]) {
+        commands.push(command);
+        if (command !== MAC_TOOLS.cp) return;
+        const target = args[args.length - 1];
+        mkdirSync(join(target, 'Contents', 'MacOS'), { recursive: true });
+        mkdirSync(join(target, 'Contents', 'Resources'), { recursive: true });
+        writeFileSync(join(target, 'Contents', 'MacOS', 'Electron'), 'binary');
+      },
+    });
+    expect(new Set(commands)).toEqual(new Set(['/bin/cp', '/usr/bin/plutil', '/usr/bin/codesign']));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 describe('macOS development bundle cache repair', () => {
   // cp/plutil/codesign are macOS tools; the fake runner materialises the same layout.
   const fakeRun = (command: string, args: string[]) => {
-    if (command !== 'cp') return;
+    if (command !== MAC_TOOLS.cp) return;
     const target = args[args.length - 1];
     mkdirSync(join(target, 'Contents', 'MacOS'), { recursive: true });
     mkdirSync(join(target, 'Contents', 'Resources'), { recursive: true });
@@ -214,11 +289,13 @@ describe.skipIf(process.platform !== 'darwin')('macOS cache cleanup safety', () 
     const executable = join(root, 'active', 'VoiceStudio.app', 'Contents', 'MacOS', 'Electron');
     mkdirSync(join(executable, '..'), { recursive: true });
     mkdirSync(join(root, 'current'));
-    linkSync(process.execPath, executable);
-    const child = spawnChild(executable, [
-      '-e',
-      'process.stdout.write("ready");setInterval(()=>{},1000)',
-    ]);
+    writeFileSync(executable, '');
+    // ps lists argv[0]; a hard-linked node breaks when it loads a relative libnode (Homebrew).
+    const child = spawnChild(
+      process.execPath,
+      ['-e', 'process.stdout.write("ready");setInterval(()=>{},1000)'],
+      { argv0: executable },
+    );
     try {
       await once(child.stdout!, 'data');
       pruneOldBundles(root, join(root, 'current'));
@@ -277,7 +354,7 @@ it('reports asynchronous Vite spawn failure and removes signal forwarding', () =
 
 describe.skipIf(process.platform !== 'darwin')('macOS bundle lifetime coordination', () => {
   const fakeRun = (command: string, args: string[]) => {
-    if (command !== 'cp') return;
+    if (command !== MAC_TOOLS.cp) return;
     const target = args[args.length - 1];
     mkdirSync(join(target, 'Contents', 'MacOS'), { recursive: true });
     mkdirSync(join(target, 'Contents', 'Resources'), { recursive: true });
@@ -327,7 +404,7 @@ describe.skipIf(process.platform !== 'darwin')('macOS bundle lifetime coordinati
         const session = prepareMacDevSession({
           ...${JSON.stringify({ ...options, appVersion })},
           runCommand(command, args) {
-            if(command !== 'cp') return;
+            if(command !== ${JSON.stringify(MAC_TOOLS.cp)}) return;
             process.send({phase:'preparing'});
             if(${paused}) {
               const deadline = Date.now() + 10000;

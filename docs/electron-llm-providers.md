@@ -20,6 +20,11 @@ as Model. Bedrock accepts a Bedrock API key or an existing `AWS_PROFILE` /
 AWS credentials, with region set in the AWS environment. Vertex uses Account ID
 as the Google project, application default credentials, and `VERTEXAI_LOCATION`
 (default `global`). Provider access and billing remain tied to your accounts.
+API Route uses `https://global.api-route.com/v1`, with `deepseek-v4.1-flash`
+as its default model. Select API Route and enter a key from
+[api-route.com](https://www.api-route.com); `API_ROUTE_API_KEY`,
+`API_ROUTE_BASE_URL` and `API_ROUTE_MODEL` also configure this entry.
+
 Model IDs vary by account; native SDK and CLI entries use manual model entry,
 while compatible endpoints offer model discovery. The generic LiteLLM entry
 requires a provider-prefixed model. Credentials can use a saved key, provider
@@ -57,7 +62,7 @@ migration of older plaintext translation-key preferences. The legacy compatible
 endpoint key uses the same encrypted storage. These paid requests
 require HTTPS, have bounded connection/read timeouts, and do not follow credential-bearing redirects.
 Connect also checks that the project/account stayed unchanged during verification.
-Credentialed LLM endpoints require HTTPS outside loopback; local HTTP servers remain supported.
+Credentialed LLM endpoints require HTTPS outside loopback; local HTTP servers remain supported. For an OpenAI-compatible server on your own network (such as `http://192.168.1.20:8000/v1`), turn on **Allow plain HTTP on my LAN** for that provider: the API key is then sent unencrypted, and only to a private, loopback or link-local IP address typed as a literal. Public hosts and DNS names are always refused, and SDK providers keep the HTTPS requirement.
 
 Provider protocol references: [LiteLLM](https://docs.litellm.ai/docs/providers),
 [Codex](https://developers.openai.com/codex/noninteractive/),

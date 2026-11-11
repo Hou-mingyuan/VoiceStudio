@@ -87,6 +87,20 @@ def _duration_factor(text: str, language: str, duration: float) -> float:
     return max(0.5, min(float(duration) / natural_s, 2.0))
 
 
+def _speed_duration(text: str, language: str, speed: object) -> float | None:
+    """The target duration a public ``speed`` multiplier asks for, if any."""
+    from services.speech_rate import expected_duration
+
+    try:
+        rate = float(speed)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(rate) or rate <= 0 or abs(rate - 1.0) < 1e-6:
+        return None
+    natural_s = expected_duration(text, language)
+    return natural_s / rate if natural_s > 0 else None
+
+
 class IndexTTS2Backend(SubprocessBackend):
     """IndexTTS 2.5 (Bilibili) — isolated subprocess with IndexTTS-2 fallback.
 
@@ -127,6 +141,10 @@ class IndexTTS2Backend(SubprocessBackend):
     id = "indextts2"
     display_name = "IndexTTS 2.5 (multilingual emotion-controlled cloning)"
     supports_voice_design = False  # requires ref audio for timbre
+    # The sidecar reads text/ref_audio/language only — no quality knobs (#3654).
+    supports_num_step = False
+    supports_guidance_scale = False
+    supports_generation_seed = True  # inference runs in a separate process
     supports_emotion = True  # graded emo_vector / emo_text / emo_alpha (#1208)
     _DEFAULT_SAMPLE_RATE = 24000
     # Explicit so IndexTTS2 stops advertising the inherited CPU-only default:
@@ -211,7 +229,9 @@ class IndexTTS2Backend(SubprocessBackend):
         return {
             "gpu_compat": compat,
             "min_vram_gb": floor,
-            **resolve_routing(compat, caps, floor),
+            # Own torch in its sidecar venv: the parent's CPU fallback does
+            # not reach it, so a kernel mismatch stays a caveat.
+            **resolve_routing(compat, caps, floor, parent_torch=False),
             "runtime_backend": None,
             "runtime_device_index": None,
             "runtime_device_name": None,
@@ -281,7 +301,8 @@ class IndexTTS2Backend(SubprocessBackend):
     # ``description`` means.
 
     def generate(self, text: str, **kw) -> "torch.Tensor":
-        self._check_language(kw.get("language"))
+        """Synthesize cloned speech with resolved emotion, duration and seed controls."""
+        checked_language = self._check_language(kw.get("language"))
         ref_audio = kw.get("ref_audio")
         if not ref_audio:
             raise RuntimeError(
@@ -302,11 +323,23 @@ class IndexTTS2Backend(SubprocessBackend):
         if description and not emo_text and not emo_vector and not emo_audio:
             emo_text = description
 
-        language = _normalize_indextts25_language(kw.get("language"), text)
+        # The checked code is the one IndexTTS declares ("Standard Arabic"
+        # -> "ar", #3816); a picker name it has no alias for would otherwise
+        # fall back to script detection.
+        language = _normalize_indextts25_language(checked_language or kw.get("language"), text)
         forwarded: dict = {"ref_audio": ref_audio, "lang": language}
+        if kw.get("seed") is not None:
+            forwarded["seed"] = int(kw["seed"])
 
         # Duration control — codec frame rate ≈ 21 Hz.
         duration = kw.get("duration")
+        if duration is None and kw.get("duration_factor") is None:
+            # Public ``speed`` (every route sends it) has no native IndexTTS
+            # knob, and was silently dropped (#3588). Express it as the
+            # duration it implies, so it reaches both 2.5 (relative factor)
+            # and legacy IndexTTS-2 (target tokens). Explicit duration
+            # controls win, so speed is never applied twice.
+            duration = _speed_duration(text, language, kw.get("speed"))
         if duration is not None:
             target_tokens = int(float(duration) * 21)
             if target_tokens > 0:

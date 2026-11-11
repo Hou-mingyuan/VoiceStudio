@@ -19,14 +19,17 @@ The chunked delivery targets <100ms time-to-first-audio (TTFA) on warm models.
 from __future__ import annotations
 
 import asyncio
-from contextlib import ExitStack
+from contextlib import ExitStack, aclosing
 import logging
+import math
 import os
 import time
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
+
+from services.reference_transcript import stored_reference_transcript
 
 router = APIRouter()
 logger = logging.getLogger("omnivoice.tts_stream")
@@ -41,35 +44,42 @@ _perf_counter = time.perf_counter
 
 
 async def _resolve_stream_backend(engine_id: str | None):
-    """Resolve the live-stream engine without bypassing host isolation."""
+    """Pick the engine instance for one streaming request.
+
+    No ``engine_id`` means the configured engine. An explicit id is a
+    per-request override and is served from the shared engine cache, so the
+    configured engine keeps running and other sockets' engines are never
+    unloaded or evicted from here.
+    """
     from services import tts_backend
 
     selected_id = engine_id or tts_backend.active_backend_id()
     cls = tts_backend.get_backend_class(selected_id)
-    # Every branch below can hand back an already-built instance; refuse first.
+    # Check the licence before choosing a branch: each one may hand back an
+    # instance that was already built.
     tts_backend.ensure_engine_licence(cls)
+
     if cls is tts_backend.OmniVoiceBackend:
         if engine_id:
-            # Preserve the explicit core override path; the shared model is
-            # loaded on demand by OmniVoiceBackend, not cached as a sidecar.
+            # The backend loads the shared model lazily itself.
             return cls()
         from services.model_manager import get_model
 
         return tts_backend.get_active_tts_backend(model=await get_model())
+
     if not engine_id:
         return tts_backend.get_active_tts_backend()
-    # The configured backend is cached separately from explicit overrides.
-    # Reuse it when the ids match rather than constructing a second instance.
-    # Never evict here: another socket can still hold a backend across chunks.
-    if (
-        tts_backend._active_instance_id == selected_id
-        and isinstance(tts_backend._active_instance, cls)
-    ):
-        if not tts_backend._built_for_other_model(cls, tts_backend._active_instance):
-            return tts_backend._active_instance
+
+    active = tts_backend._active_instance
+    if tts_backend._active_instance_id == selected_id and isinstance(active, cls):
+        if not tts_backend._built_for_other_model(cls, active):
+            return active
+        # The model preference changed: pick up the new build without
+        # unloading the instance a running job may still hold.
         if tts_backend.active_backend_id() == selected_id:
             return tts_backend.get_active_tts_backend()
     return tts_backend.get_engine_instance_for(selected_id)
+
 
 class StreamTTSRequest(BaseModel):
     """Client request for streaming TTS."""
@@ -77,6 +87,11 @@ class StreamTTSRequest(BaseModel):
     voice: Optional[str] = None       # profile_id or preset name
     language: Optional[str] = None
     speed: float = 1.0
+    # Relative pacing for engines with native duration control (IndexTTS 2.5:
+    # <1 faster, >1 slower). Relative, so it holds for every streamed
+    # sentence; an absolute ``duration`` would apply to each one and is not
+    # accepted here. Takes precedence over ``speed`` (#3588).
+    duration_factor: Optional[float] = None
     instruct: Optional[str] = None
     description: Optional[str] = None
     # Emotion control (IndexTTS2)
@@ -117,6 +132,19 @@ def resolve_emotion_clip(value: object) -> str:
     raise ValueError(EMO_AUDIO_DETAIL)
 
 
+DURATION_FACTOR_DETAIL = "duration_factor must be a number from 0.5 to 2.0."
+
+
+def _duration_factor(value: object) -> float:
+    """A validated relative pacing factor; refuses rather than ignores (#3588)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(DURATION_FACTOR_DETAIL)
+    factor = float(value)
+    if not math.isfinite(factor) or not 0.5 <= factor <= 2.0:
+        raise ValueError(DURATION_FACTOR_DETAIL)
+    return factor
+
+
 def build_stream_kwargs(data: dict) -> dict:
     """Generation kwargs for one streaming request, voice profile resolved.
 
@@ -124,6 +152,8 @@ def build_stream_kwargs(data: dict) -> dict:
     voice the same way (locked clip preferred, profile instruct as fallback).
     """
     kw: dict = {"speed": data.get("speed", 1.0)}
+    if data.get("duration_factor") is not None:
+        kw["duration_factor"] = _duration_factor(data["duration_factor"])
     if data.get("language"):
         kw["language"] = data["language"]
     if data.get("instruct"):
@@ -159,8 +189,9 @@ def build_stream_kwargs(data: dict) -> dict:
                     kw["ref_audio"] = contained_join(VOICES_DIR, row["locked_audio_path"])
                 elif row["ref_audio_path"]:
                     kw["ref_audio"] = contained_join(VOICES_DIR, row["ref_audio_path"])
-                if row["ref_text"]:
-                    kw["ref_text"] = row["ref_text"]
+                stored_ref_text = stored_reference_transcript(row)
+                if stored_ref_text:
+                    kw["ref_text"] = stored_ref_text
                 if row["instruct"] and not data.get("instruct"):
                     kw["instruct"] = row["instruct"]
             else:
@@ -186,9 +217,13 @@ def split_stream_sentences(text: str, language: str | None) -> list[str]:
     single-sentence request behaves exactly like a single-shot render.
     """
     from services.text_normalization import normalize_for_tts
+    return split_normalized_sentences(normalize_for_tts(text, language), language)
+
+
+def split_normalized_sentences(text: str, language: str | None) -> list[str]:
+    """Split text that already passed through the shared normalization pass."""
     from services.sentence_chunker import SentenceChunker
 
-    text = normalize_for_tts(text, language)
     chunker = SentenceChunker(language=(language or "en"))
     sentences = chunker.push(text)
     sentences.extend(chunker.flush())
@@ -245,15 +280,17 @@ async def synthesize_stream(
     """
     import functools
 
+    from services.tts_backend import engine_in_use
     from core.device_caps import detect_host_caps
     from core.scrub import scrub_text
     from services.engine_routing import runtime_compute_profile_async
     from services.model_manager import generate_timeout_s, run_on_gpu_pool_guarded
 
     backend = await _resolve_stream_backend(engine)
-    from services.tts_backend import engine_in_use
 
     kw = build_stream_kwargs({"voice": voice, "language": language})
+    # Hold the engine for the whole body (routing check, eviction of the
+    # others, every sentence job) so the idle sweeper cannot unload it midway.
     with engine_in_use(backend):
         routing = await runtime_compute_profile_async(backend, detect_host_caps())
         if routing["routing_status"] == "unavailable":
@@ -269,6 +306,31 @@ async def synthesize_stream(
                 timeout=generate_timeout_s(sentence, engine=backend),
             )
             yield wav, sr
+
+
+async def _ws_pcm_chunks(backend, kw, text, language, *, native):
+    if native:
+        from api.routers.openai_compat import PCM_SAMPLE_RATE, _native_pcm_stream
+        from services.text_normalization import normalize_for_tts
+
+        normalized = normalize_for_tts(text, language)
+        async with aclosing(_native_pcm_stream(backend, normalized, kw, sse=False, timed=True)) as stream:
+            async for pcm, synth_seconds in stream:
+                yield pcm, PCM_SAMPLE_RATE, synth_seconds
+        return
+
+    from functools import partial
+
+    from services.audio_io import pcm16_mono
+    from services.model_manager import generate_timeout_s, run_on_gpu_pool_guarded
+
+    for sentence in split_stream_sentences(text, language):
+        wav, rate, synth_seconds = await run_on_gpu_pool_guarded(
+            partial(render_stream_sentence, backend, kw, sentence),
+            what="TTS generate",
+            timeout=generate_timeout_s(sentence, engine=backend),
+        )
+        yield pcm16_mono(wav).numpy().tobytes(), rate, synth_seconds
 
 
 @router.websocket("/ws/tts")
@@ -303,9 +365,8 @@ async def ws_tts(websocket: WebSocket):
             t0 = _perf_counter()
             text = data["text"]
 
-            # Close on every exit: normal completion, routing rejection,
-            # disconnect, generation failure or task cancellation.
-            engine_lease = ExitStack()
+            # Per-request lease on the engine, released on every exit path below.
+            lease = ExitStack()
             try:
                 # Resolve engine
                 engine_id = data.get("engine")
@@ -323,12 +384,10 @@ async def ws_tts(websocket: WebSocket):
                     log_if_low(f"TTS stream load ({engine_id or 'active engine'})")
                 except Exception:
                     pass
-                backend = await _resolve_stream_backend(engine_id)
                 from services.tts_backend import engine_in_use
 
-                # The idle sweeper can run between sentence jobs and socket
-                # sends. Hold the cached instance for this whole request.
-                engine_lease.enter_context(engine_in_use(backend))
+                backend = await _resolve_stream_backend(engine_id)
+                lease.enter_context(engine_in_use(backend, yield_to_native=True))
 
                 # ── Routing gate (#21 — no silent CPU fallback). WebSockets have
                 # no response headers, so this uses frames: an error frame +
@@ -364,20 +423,20 @@ async def ws_tts(websocket: WebSocket):
                 except ValueError as exc:
                     await websocket.send_json({"type": "error", "detail": str(exc)})
                     continue
+                can_stream = getattr(backend, "can_stream", None)
+                native = (
+                    can_stream is not None
+                    and kw.get("duration_factor") is None
+                    and can_stream(**kw)
+                )
                 await evict_other_tts_engines(backend.id)
+                if native:
+                    from services.model_manager import generate_timeout_s
 
-                # Normalized exactly once on the whole text, then chunked
-                # (see split_stream_sentences). The request's `language` is all
-                # this route knows (None → universal safety filters only).
-                sentences = split_stream_sentences(text, data.get("language"))
+                    # The shared native iterator acquires an exclusive lease.
+                    send_timeout = generate_timeout_s(text, engine=backend)
+                    lease.close()
 
-                # Run generation in the GPU pool
-                import functools
-                from services.model_manager import run_on_gpu_pool_guarded
-
-                _generate = functools.partial(render_stream_sentence, backend, kw)
-
-                import torch
                 total_samples = 0
                 sr = backend.sample_rate
                 started = False
@@ -389,54 +448,36 @@ async def ws_tts(websocket: WebSocket):
                 # engine having changed at all.
                 synth_time = 0.0
 
-                for sentence in sentences:
-                    # Bounded + pool-reset on hang so a wedged generate can't
-                    # starve the GPU pool and brick the backend (#730 class). On
-                    # timeout GpuJobTimeoutError propagates to the handler below,
-                    # which sends an actionable error frame.
-                    # Length-scaled budget per sentence (#1190) — the flat 300s
-                    # default is gone from every dispatch.
-                    from services.model_manager import generate_timeout_s
-                    wav_tensor, sr, sentence_synth_s = await run_on_gpu_pool_guarded(
-                        functools.partial(_generate, sentence),
-                        what="TTS generate",
-                        timeout=generate_timeout_s(sentence, engine=backend),
-                    )
-                    synth_time += sentence_synth_s
+                async with aclosing(_ws_pcm_chunks(
+                    backend, kw, text, data.get("language"), native=native,
+                )) as chunks:
+                    async for pcm_bytes, sr, chunk_synth_s in chunks:
+                        synth_time += chunk_synth_s
+                        if not started:
+                            # The rate is known only after lazy generation.
+                            start_frame = {
+                                "type": "start",
+                                "sample_rate": sr,
+                                "channels": 1,
+                                "format": "pcm16",
+                                "engine": backend.id,
+                            }
+                            if native:
+                                await asyncio.wait_for(websocket.send_json(start_frame), timeout=send_timeout)
+                            else:
+                                await websocket.send_json(start_frame)
+                            started = True
 
-                    if not started:
-                        # Send metadata after the first generation so
-                        # sample_rate is real (lazy-loading engines report
-                        # their true rate only once weights are up).
-                        await websocket.send_json({
-                            "type": "start",
-                            "sample_rate": sr,
-                            "channels": 1,
-                            "format": "pcm16",
-                            "engine": backend.id,
-                        })
-                        started = True
-
-                    # Convert to 16-bit PCM and stream
-                    from services.audio_io import pcm16_mono
-                    pcm = pcm16_mono(wav_tensor)
-                    pcm_bytes = pcm.numpy().tobytes()
-
-                    n_samples = len(pcm)
-                    sent_samples = 0
-                    while sent_samples < n_samples:
-                        end = min(sent_samples + CHUNK_SAMPLES, n_samples)
-                        chunk = pcm_bytes[sent_samples * 2: end * 2]
-                        await websocket.send_bytes(chunk)
-                        if first_audio_at is None:
-                            # TTFA ends when the first audio bytes have been
-                            # handed to the socket.  The previous log used the
-                            # whole-render duration and called it TTFA.
-                            first_audio_at = _perf_counter()
-                        sent_samples = end
-                        # Yield to event loop between chunks for responsiveness
-                        await asyncio.sleep(0)
-                    total_samples += n_samples
+                        for offset in range(0, len(pcm_bytes), CHUNK_SAMPLES * 2):
+                            chunk = pcm_bytes[offset:offset + CHUNK_SAMPLES * 2]
+                            if native:
+                                await asyncio.wait_for(websocket.send_bytes(chunk), timeout=send_timeout)
+                            else:
+                                await websocket.send_bytes(chunk)
+                            if first_audio_at is None:
+                                first_audio_at = _perf_counter()
+                            await asyncio.sleep(0)
+                        total_samples += len(pcm_bytes) // 2
 
                 finished_at = _perf_counter()
                 wall_time_raw = max(0.0, finished_at - t0)
@@ -473,6 +514,8 @@ async def ws_tts(websocket: WebSocket):
                     f"{rtf:.3f}" if rtf is not None else "n/a",
                 )
 
+            except WebSocketDisconnect:
+                break
             except Exception as e:
                 from core.failure import licence_required_detail
 
@@ -491,7 +534,7 @@ async def ws_tts(websocket: WebSocket):
                 except Exception:
                     break
             finally:
-                engine_lease.close()
+                lease.close()
 
     except WebSocketDisconnect:
         pass

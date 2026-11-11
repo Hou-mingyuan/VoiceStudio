@@ -66,6 +66,22 @@ def contributors_section(repo, tag, gh=_gh):
     """
     latest = gh("api", f"repos/{repo}/releases/latest", "--jq", ".tag_name + \" \" + .published_at").split()
     base, since = latest[0], latest[1][:10]
+    ordered = _ranked_contributors(repo, base, since, tag, gh)
+    if not ordered:
+        return ""
+    mentions = ", ".join(f"@{login}" for login in ordered)
+    previous = _previous_beta(repo, tag, gh)
+    if not previous:
+        return f"### Contributors\n\nThanks to everyone who contributed to this release: {mentions}\n"
+    # A beta's notes span everything since the last stable, so its full list repeats
+    # from beta to beta; name who is new since the previous beta first.
+    new = _ranked_contributors(repo, previous[0], previous[1], tag, gh)
+    new_line = ", ".join(f"@{login}" for login in new) if new else "no new contributors"
+    return (f"### Contributors\n\nNew since {previous[0]}: {new_line}\n\n"
+            f"Everyone who contributed since {base}: {mentions}\n")
+
+
+def _ranked_contributors(repo, base, since, tag, gh):
     commit_authors = gh("api", f"repos/{repo}/compare/{base}...{tag}", "--paginate",
                         "--jq", ".commits[].author.login // empty").split()
     pr_authors = gh("pr", "list", "--repo", repo, "--state", "merged", "--search", f"merged:>={since}",
@@ -77,14 +93,26 @@ def contributors_section(repo, tag, gh=_gh):
         if login.lower() not in seen:
             ordered.append(login)
             seen.add(login.lower())
-    if not ordered:
-        return ""
-    mentions = ", ".join(f"@{login}" for login in ordered)
-    return f"### Contributors\n\nThanks to everyone who contributed to this release: {mentions}\n"
+    return ordered
+
+
+def _previous_beta(repo, tag, gh):
+    """`(tag, publish date)` of the newest published earlier beta of this version, or None."""
+    match = re.fullmatch(r"(v\d+\.\d+\.\d+)-beta\.(\d+)", tag)
+    if not match:
+        return None
+    best = None
+    for line in gh("api", f"repos/{repo}/releases", "--paginate", "--jq",
+                   '.[] | select(.draft | not) | .tag_name + " " + .published_at').splitlines():
+        parts = line.split()
+        other = re.fullmatch(rf"{re.escape(match[1])}-beta\.(\d+)", parts[0]) if len(parts) == 2 else None
+        if other and int(other[1]) < int(match[2]) and (best is None or int(other[1]) > best[0]):
+            best = (int(other[1]), parts[0], parts[1][:10])
+    return best and (best[1], best[2])
 
 
 def prepare(assets, tag, sunset_tag=None, repo=None, gh=_gh):
-    version = json.loads(Path("package.json").read_text())["version"]
+    version = json.loads(Path("package.json").read_text(encoding="utf-8"))["version"]
     if tag != f"v{version}":
         raise ValueError("Tag must match package version")
     channel = channel_for(version)
@@ -95,7 +123,7 @@ def prepare(assets, tag, sunset_tag=None, repo=None, gh=_gh):
         for p in files]}
     verify_release(release, assets, channel=channel, version=version)
     for manifest in assets.glob(f"electron-{channel}-*.yml"):
-        text = manifest.read_text()
+        text = manifest.read_text(encoding="utf-8")
         artifact = re.search(r"^\s+- url:\s*(.+)$", text, re.M)[1].strip().strip("'\"")
         expected = re.search(r"^\s{4}sha512:\s*(.+)$", text, re.M)[1].strip().strip("'\"")
         actual = base64.b64encode(hashlib.sha512((assets / artifact).read_bytes()).digest()).decode()
@@ -108,9 +136,9 @@ def prepare(assets, tag, sunset_tag=None, repo=None, gh=_gh):
     # prerelease, so betas carry no sunset feeds.
     if sunset_tag and channel == "stable":
         for name in ("latest.json", "latest-user.json"):
-            validate_sunset(json.loads((assets / name).read_text()), sunset_tag)
+            validate_sunset(json.loads((assets / name).read_text(encoding="utf-8")), sunset_tag)
     section = re.search(rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## |\Z)",
-                        Path("CHANGELOG.md").read_text(), re.M | re.S)
+                        Path("CHANGELOG.md").read_text(encoding="utf-8"), re.M | re.S)
     if not section or not section[1].strip():
         raise ValueError("Write versioned CHANGELOG notes before release")
     notes = section[1].strip() + "\n"
@@ -124,10 +152,10 @@ def prepare(assets, tag, sunset_tag=None, repo=None, gh=_gh):
             block = ""
         if block:
             notes += "\n" + block
-    (assets / "RELEASE_NOTES.md").write_text(notes)
+    (assets / "RELEASE_NOTES.md").write_text(notes, encoding="utf-8")
     (assets / "SHA256SUMS.txt").write_text("\n".join(
         f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}" for p in sorted(files)
-        if p.name not in {"SHA256SUMS.txt", "RELEASE_NOTES.md"}) + "\n")
+        if p.name not in {"SHA256SUMS.txt", "RELEASE_NOTES.md"}) + "\n", encoding="utf-8")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -139,7 +167,7 @@ if __name__ == "__main__":
                         help="Print stable or beta for the package version and exit")
     args = parser.parse_args()
     if args.print_channel:
-        print(channel_for(json.loads(Path("package.json").read_text())["version"]))
+        print(channel_for(json.loads(Path("package.json").read_text(encoding="utf-8"))["version"]))
     elif args.assets and args.tag:
         prepare(args.assets, args.tag, args.sunset_tag, repo=args.repo)
     else:

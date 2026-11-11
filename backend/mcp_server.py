@@ -83,6 +83,156 @@ def _sniff_audio_ext(raw: bytes) -> str:
     return ".wav"
 
 
+# ── Backend errors ───────────────────────────────────────────────────────
+# A failed backend call usually explains itself in the response body (a
+# licence to accept, a model to download, a duplicate name). httpx's own
+# raise_for_status() message keeps only the status line and URL — and the
+# in-process transport's URL has no port — so agents were told "403 Forbidden
+# for url http://127.0.0.1/transcribe" instead of what to do about it.
+
+
+# Error text goes to an LLM agent, which may be a hosted model: strip secrets
+# and home paths the backend echoed, and cap a proxy's HTML error page.
+_ERROR_DETAIL_MAX_CHARS = 1000
+
+
+def _scrubbed(value):
+    """``value`` with every string in it, keys included, passed through ``scrub_text``.
+
+    Structured values must be scrubbed *before* JSON encoding: ``json.dumps``
+    doubles each backslash, and a Windows home path written as
+    ``C:\\\\Users\\\\alice`` no longer matches the scrubber's patterns."""
+    from core.scrub import scrub_text
+
+    if isinstance(value, str):
+        return scrub_text(value)
+    if isinstance(value, list):
+        return [_scrubbed(item) for item in value]
+    if isinstance(value, dict):
+        return {_scrubbed(key): _scrubbed(item) for key, item in value.items()}
+    return value
+
+
+def _public_error_text(text: object) -> str:
+    """``text`` with credentials and home paths redacted, length-capped.
+
+    A JSON body (a plain-text fallback that is really JSON) is scrubbed value
+    by value and re-encoded, for the same backslash reason as ``_scrubbed``."""
+    from core.scrub import scrub_text
+
+    text = str(text)
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, (dict, list)):
+        text = json.dumps(_scrubbed(parsed))
+    cleaned = scrub_text(text).strip()
+    if len(cleaned) > _ERROR_DETAIL_MAX_CHARS:
+        cleaned = cleaned[:_ERROR_DETAIL_MAX_CHARS].rstrip() + "…"
+    return cleaned
+
+
+def _backend_error_detail(response) -> "str | None":
+    """The backend's own explanation of a failed response, or None.
+
+    FastAPI errors carry ``detail`` as a string, a structured object (typed
+    errors such as ``model_licence_required`` put the readable text in
+    ``message``) or a list of validation errors (each with a ``msg``). Only a
+    non-empty string counts as readable text; any other shape is rendered as
+    JSON rather than a Python repr. The value came from ``response.json()``,
+    so ``json.dumps`` always accepts it."""
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if not detail:
+        return None
+    if isinstance(detail, str):
+        text = detail
+    elif isinstance(detail, list):
+        text = "; ".join(_readable(item, "msg") for item in detail)
+    else:
+        text = _readable(detail, "message")
+    return _public_error_text(text) or None
+
+
+def _readable(value, text_key: str) -> str:
+    """``value[text_key]`` when it is a non-empty string, else ``value`` as JSON."""
+    text = value.get(text_key) if isinstance(value, dict) else value
+    if isinstance(text, str) and text:
+        return text
+    return json.dumps(_scrubbed(value))
+
+
+def _raise_for_backend_status(response) -> None:
+    """``response.raise_for_status()``, keeping the backend's explanation.
+
+    Raises the same ``httpx.HTTPStatusError`` (with ``.response`` intact) so
+    callers that already catch it keep working; only the message changes.
+    Anything but a 2xx is still refused: the clients do not follow redirects,
+    so a 3xx (a proxy bouncing to HTTPS or a login page) is a failed request,
+    not an empty success."""
+    if response.is_success:
+        return
+    detail = _backend_error_detail(response) if response.is_error else None
+    if not detail:
+        response.raise_for_status()
+    import httpx
+
+    raise httpx.HTTPStatusError(
+        f"VoiceStudio returned HTTP {response.status_code} for "
+        f"{response.request.method} {response.request.url.path}: {detail}",
+        request=response.request,
+        response=response,
+    )
+
+
+# A JSON error detail is a few hundred bytes; anything past this is a proxy
+# or HTML error page, not worth holding in the agent process.
+_MAX_ERROR_BODY_BYTES = 64 * 1024
+
+
+async def _buffered_error_response(response):
+    """A buffered copy of a failed *streamed* response, safe to read ``detail`` from.
+
+    Reads at most ``_MAX_ERROR_BODY_BYTES`` of the body. A larger body is
+    dropped (the copy is empty), so ``_raise_for_backend_status`` falls back to
+    the plain status message instead of buffering an unbounded error page.
+    Only the content type is carried over: the chunks are already decoded, so
+    the original Content-Encoding/Length would no longer describe them."""
+    import httpx
+
+    body = bytearray()
+    async for chunk in response.aiter_bytes():
+        body += chunk
+        if len(body) > _MAX_ERROR_BODY_BYTES:
+            body.clear()
+            break
+    headers = {}
+    if content_type := response.headers.get("content-type"):
+        headers["content-type"] = content_type
+    return httpx.Response(
+        response.status_code,
+        headers=headers,
+        content=bytes(body),
+        request=response.request,
+    )
+
+
+async def _raise_for_streamed_status(response) -> None:
+    """``_raise_for_backend_status`` for a *streamed* response.
+
+    Only a 4xx/5xx body can hold a ``detail``, so only those are buffered
+    (bounded). Anything else that is not a 2xx, such as a redirect, is raised
+    on the original response without touching its body, so a slow body
+    cannot stall the call and the ``Location`` header stays available."""
+    if response.is_error:
+        _raise_for_backend_status(await _buffered_error_response(response))
+    _raise_for_backend_status(response)
+
+
 # ── Output mode + the base path boundary ─────────────────────────────────
 # An LLM agent that receives a WAV as base64 pays for every byte in context:
 # a 1.4 s clip already brushes per-result token caps, and a paragraph of
@@ -503,7 +653,7 @@ def create_mcp_server(app=None):
     async def _api_get(path: str):
         async with _client(30) as c:
             r = await c.get(path)
-            r.raise_for_status()
+            _raise_for_backend_status(r)
             return r.json()
 
     async def _api_post_form(
@@ -512,14 +662,19 @@ def create_mcp_server(app=None):
         wait = _post_timeout_s() if timeout is None else timeout
         async with _client(wait) as c:
             r = await c.post(path, data=data, files=files or {})
-            r.raise_for_status()
+            _raise_for_backend_status(r)
             return r
 
-    async def _api_post_json(path: str, payload: dict):
-        async with _client(_post_timeout_s()) as c:
-            r = await c.post(path, json=payload)
-            r.raise_for_status()
-            return r.json()
+    async def _submit_json(path: str, body: dict):
+        timeout = _post_timeout_s()
+        async with _client(timeout) as client:
+            response = await client.post(path, json=body)
+            _raise_for_backend_status(response)
+            decoded = response.json()
+        return decoded
+
+    def _request_failure(exc: Exception) -> str:
+        return json.dumps({"error": f"VoiceStudio backend request failed: {exc}"})
 
     # ── Tools ───────────────────────────────────────────────────────────
 
@@ -552,9 +707,9 @@ def create_mcp_server(app=None):
 
         Args:
             text: The text to synthesize into speech.
-            language: Target language (ISO code or 'Auto'). 646 languages
-                supported. Omit to use the voice profile's saved language;
-                an explicit 'Auto' overrides it.
+            language: Target ISO language code or "Auto"; 646 languages are
+                supported. Omit it to use the saved voice language. Passing
+                "Auto" explicitly overrides that saved choice.
             profile_id: ID of a saved voice profile to clone. Omit to use this
                 agent's bound voice (Settings → MCP), else the default voice.
             instruct: Style instruction (e.g. 'whisper', 'excited', 'narrator').
@@ -594,8 +749,6 @@ def create_mcp_server(app=None):
             "speed": str(speed),
             "num_step": str(steps),
         }
-        # Omitted, not "Auto": the backend fills an omitted language from the
-        # profile (#533), while an explicit Auto bypasses the saved language.
         if language:
             form["language"] = language
         if profile_id:
@@ -618,7 +771,7 @@ def create_mcp_server(app=None):
             # buffering another full audio copy in the agent process.
             async with _client(300) as c:
                 async with c.stream("GET", f"/audio/{audio_id}.{format}") as encoded:
-                    encoded.raise_for_status()
+                    await _raise_for_streamed_status(encoded)
 
         return json.dumps(await _speech_result(
             audio_id, gen_time, duration, r.content, _api_base(), format
@@ -777,12 +930,10 @@ def create_mcp_server(app=None):
             # Cloning commonly fails validation (duplicate name, audio too
             # short, quality gate) — surface the backend's own detail as the
             # structured error the agent expects, not a framework traceback.
-            try:
-                detail = exc.response.json().get("detail")
-            except ValueError:
-                detail = None
-            return json.dumps({"error": str(detail or exc.response.text
-                                             or f"HTTP {exc.response.status_code}")})
+            detail = _backend_error_detail(exc.response)
+            return json.dumps({"error": detail
+                                        or _public_error_text(exc.response.text)
+                                        or f"HTTP {exc.response.status_code}"})
         except (httpx.HTTPError, ValueError) as exc:
             # Transport failures + non-JSON success bodies (proxy error page).
             return json.dumps({"error": f"backend request failed: {exc}"})
@@ -790,108 +941,92 @@ def create_mcp_server(app=None):
 
     @mcp.tool()
     async def describe_voice(description: str) -> str:
-        """Preview how a voice description maps onto voice-design attributes.
+        """Preview how a voice description maps onto the design vocabulary.
 
-        Nothing is saved. Use this before design_voice to see what the
-        description will produce. The design space is small and fixed; only
-        these tokens (and close synonyms) are understood:
-          Gender: male, female
-          Age: child, teenager, young adult, middle-aged, elderly
-          Pitch: very low / low / moderate / high / very high pitch
-          Style: whisper
-          EnglishAccent: american, british, australian, canadian, indian,
-            japanese, korean, chinese, russian, portuguese accent
-          ChineseDialect (Chinese speech; overrides an English accent):
-            sichuan, dongbei / northeastern chinese, henan, shaanxi, gansu,
-            guilin, guizhou, jinan, ningxia, qingdao, shijiazhuang, yunnan
-            (e.g. "sichuan dialect")
-        Timbre words ("gravelly", "raspy") and other accents are ignored and
-        reported in `unmatched`. For a voice outside this space, use
-        clone_voice with reference audio instead.
-
-        Args:
-            description: Free-text description, e.g. "an elderly man with a
-                deep voice and a british accent".
-
-        Returns:
-            JSON with attrs (category → token or "Auto"), instruct, matched
-            and unmatched.
+        Supported choices are gender (male, female); age (child, teenager,
+        young adult, middle-aged, elderly); pitch (very low, low, moderate,
+        high, very high pitch); style (whisper); and English accents
+        (american, british, australian, canadian, indian, japanese, korean,
+        chinese, russian, portuguese accent). For Chinese speech, a dialect
+        overrides the English accent: sichuan, dongbei/northeastern chinese,
+        henan, shaanxi, gansu, guilin, guizhou, jinan, ningxia, qingdao,
+        shijiazhuang, or yunnan. Timbre terms such as "gravelly" and "raspy"
+        and unsupported accents are ignored and returned in ``unmatched``.
+        Use this before ``design_voice`` to inspect the mapping. For voices
+        beyond this vocabulary, use ``clone_voice`` with reference audio.
         """
         import httpx
         try:
-            parsed = await _api_post_json("/design/describe", {"description": description})
-        except (httpx.HTTPError, ValueError) as exc:
-            return json.dumps({"error": f"backend request failed: {exc}"})
-        return json.dumps(parsed)
+            mapping = await _submit_json("/design/describe", {"description": description})
+        except (httpx.HTTPError, ValueError) as request_error:
+            return _request_failure(request_error)
+        return json.dumps(mapping)
 
     @mcp.tool()
-    async def design_voice(
-        name: str,
-        description: str,
-        language: str = "Auto",
-    ) -> str:
-        """Design and save a new voice profile from a text description.
+    async def design_voice(name: str, description: str, language: str = "Auto") -> str:
+        """Create a stable design voice from a free-text description.
 
-        The description is mapped onto the same attributes describe_voice
-        previews (see its docstring for the vocabulary). The backend tries to
-        render a fixed-seed identity sample at save time; if the voice engine
-        isn't ready, the profile is still saved and the same sample is
-        rendered on first use, so the voice stays stable across
-        generate_speech calls either way. Pass the returned profile_id to
-        generate_speech. Refuses a description that matches no attribute.
+        The description maps to the attributes shown by ``describe_voice``.
+        A description with no matching attribute is refused. The backend
+        attempts to render a fixed-seed identity sample while saving; when the
+        engine is unavailable, the profile remains saved and renders that
+        sample on first use, preserving its identity. Pass the returned
+        ``profile_id`` to ``generate_speech``.
 
         Args:
-            name: A human-friendly name for the new voice.
-            description: Free-text description of the voice.
-            language: The voice's saved language (ISO code or 'Auto'); used
-                for its sample and by generate_speech calls that omit one.
+            name: Display name for the saved profile.
+            description: Words to map onto supported design attributes.
+            language: Saved ISO language code or "Auto".
 
         Returns:
-            JSON with the new profile's id, name, kind, the attrs used, and
-            any unmatched description fragments.
+            JSON containing the profile id, mapped attributes, and unmatched words.
         """
         import httpx
         try:
-            parsed = await _api_post_json("/design/describe", {"description": description})
-        except (httpx.HTTPError, ValueError) as exc:
-            return json.dumps({"error": f"backend request failed: {exc}"})
-        if not parsed.get("matched"):
+            design_map = await _submit_json("/design/describe", {"description": description})
+        except (httpx.HTTPError, ValueError) as request_error:
+            return _request_failure(request_error)
+
+        ignored_words = design_map.get("unmatched", [])
+        if not design_map.get("matched"):
             return json.dumps({
-                "error": "description matched no design attribute; see "
-                         "describe_voice for the vocabulary",
-                "unmatched": parsed.get("unmatched", []),
+                "error": "No supported design trait was found. Check the text with describe_voice first.",
+                "unmatched": ignored_words,
             })
+        chosen_attrs = design_map.get("attrs", {})
+        profile_fields = {
+            "name": name,
+            "kind": "design",
+            "vd_states": json.dumps(chosen_attrs),
+            "instruct": design_map.get("instruct", ""),
+            "language": language,
+        }
         try:
-            r = await _api_post_form(
+            save_response = await _api_post_form(
                 "/profiles",
-                data={
-                    "name": name,
-                    "kind": "design",
-                    "vd_states": json.dumps(parsed["attrs"]),
-                    "instruct": parsed.get("instruct", ""),
-                    "language": language,
-                },
-                # The save renders the identity sample through the GPU
-                # queue, so wait as long as a generation would; giving up
-                # early could let the save land with its profile_id lost.
+                data=profile_fields,
                 timeout=_post_timeout_s("generate"),
             )
-            p = r.json()
-        except httpx.HTTPStatusError as exc:
-            try:
-                detail = exc.response.json().get("detail")
-            except ValueError:
-                detail = None
-            return json.dumps({"error": str(detail or exc.response.text
-                                             or f"HTTP {exc.response.status_code}")})
-        except (httpx.HTTPError, ValueError) as exc:
-            return json.dumps({"error": f"backend request failed: {exc}"})
+        except httpx.HTTPStatusError as status_error:
+            explanation = (
+                _backend_error_detail(status_error.response)
+                or _public_error_text(status_error.response.text)
+                or f"HTTP {status_error.response.status_code}"
+            )
+            return json.dumps({"error": explanation})
+        except httpx.HTTPError as request_error:
+            return _request_failure(request_error)
+
+        try:
+            saved_profile = save_response.json()
+        except ValueError as decode_error:
+            return _request_failure(decode_error)
         return json.dumps({
-            "profile_id": p["id"],
-            "name": p["name"],
-            "kind": p["kind"],
-            "attrs": parsed["attrs"],
-            "unmatched": parsed.get("unmatched", []),
+            "profile_id": saved_profile["id"],
+            "name": saved_profile["name"],
+            "kind": saved_profile["kind"],
+            "attrs": chosen_attrs,
+            "unmatched": ignored_words,
         })
 
     return mcp
@@ -982,7 +1117,9 @@ def main():
 
     if args.sse:
         logger.info("Starting MCP server on SSE transport, port %d", args.port)
-        mcp.run(transport="sse", port=args.port)
+        # FastMCP.run() takes no port: the SSE server listens on settings.port.
+        mcp.settings.port = args.port
+        mcp.run(transport="sse")
     else:
         logger.info("Starting MCP server on stdio transport")
         mcp.run(transport="stdio")

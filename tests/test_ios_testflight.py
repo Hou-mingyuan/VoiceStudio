@@ -1,10 +1,14 @@
 import importlib.util
+import os
+import subprocess
 import plistlib
 import sys
 from pathlib import Path
 
 import pytest
 import yaml
+
+PASS_GATE = "steps.pass.outputs.hit != 'true'"  # .github/actions/ci-pass skips the whole job
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -79,7 +83,8 @@ def test_workflow_signs_verifies_and_cleans_up_the_key():
     assert cleanup["name"] == "Remove API key" and cleanup["if"] == "always()"
     source = WORKFLOW.read_text(encoding="utf-8")
     assert "CODE_SIGNING_ALLOWED=NO" not in source
-    assert "testFlightInternalTestingOnly bool true" in source
+    upload = next(step for step in steps if step.get("name") == "Upload to TestFlight")
+    assert upload["env"]["TESTFLIGHT_AUDIENCE"] == "${{ inputs.audience || 'internal' }}"
     # Secrets reach only the steps that need them, never the whole job.
     assert "secrets." not in yaml.dump(load_workflow()["jobs"]["testflight"].get("env", {}))
 
@@ -91,7 +96,8 @@ def test_clean_testflight_runner_prepares_native_dependencies_before_project_gen
     generate = next(i for i, command in enumerate(commands) if "xcodegen generate" in command)
     archive = next(i for i, command in enumerate(commands) if "-archivePath" in command)
     assert native < generate < archive
-    assert "if" not in steps[native]  # A cache hit still needs generated headers restored.
+    # A cache hit still needs generated headers restored; only a pass-cache skip of the whole job may gate it.
+    assert steps[native].get("if") in (None, PASS_GATE)
 
 
 def test_archive_check_matches_automatic_signing():
@@ -160,7 +166,7 @@ def test_native_runtime_cache_survives_later_app_or_ui_failures(filename):
     build = next(i for i, step in enumerate(steps) if "bash mobile/native/ios/build.sh ios" in step.get("run", ""))
     generate = next(i for i, step in enumerate(steps) if "xcodegen generate" in step.get("run", ""))
     assert build < steps.index(save) < generate
-    assert "if" not in steps[build]  # Cache hits still need generated headers restored.
+    assert steps[build].get("if") in (None, PASS_GATE)  # Cache hits still need generated headers restored.
     assert save["with"]["path"] == restore["with"]["path"]
     assert save["with"]["key"] == "${{ steps." + restore["id"] + ".outputs.cache-primary-key }}"
 
@@ -202,3 +208,53 @@ def test_info_plist_carries_the_content_reports_url(tmp_path, monkeypatch):
     prepare_resources.prepare(tmp_path / "bundle", tmp_path / "Info.plist")
     info = plistlib.loads((tmp_path / "Info.plist").read_bytes())
     assert info["VoiceStudioContentReportsURL"] == "https://dev-appapi.voicestudio.sh"
+
+
+def test_host_inference_prepares_all_runtime_headers_before_compiling_swift():
+    # __has_include compiles no-runtime stubs when the generated headers are
+    # absent. Adding a header later does not invalidate SwiftPM's cached C object.
+    workflow = yaml.load((ROOT / ".github/workflows/mobile.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    steps = workflow["jobs"]["ios-inference"]["steps"]
+    prepare = next(i for i, step in enumerate(steps) if "mobile/native/ios/build.sh macos-runtimes" in step.get("run", ""))
+    first_compile = next(i for i, step in enumerate(steps) if any(command in step.get("run", "") for command in ("real-inference.sh", "check-swift.sh")))
+    assert prepare < first_compile, "Provision every runtime header before SwiftPM compiles VSNative.c"
+    assert steps[prepare].get("if") in (None, PASS_GATE), "Cache hits must restore generated headers too"
+
+
+def test_upload_audience_is_explicit_and_internal_by_default():
+    audience = load_workflow()["on"]["workflow_dispatch"]["inputs"]["audience"]
+    assert audience["type"] == "choice"
+    assert audience["default"] == "internal"
+    assert audience["options"] == ["internal", "external"]
+
+
+@pytest.mark.skipif(not Path("/usr/libexec/PlistBuddy").is_file(), reason="TestFlight uploader runs on macOS")
+@pytest.mark.parametrize("audience,internal_only", [("internal", True), ("external", False)])
+def test_real_upload_step_writes_selected_audience(tmp_path, audience, internal_only):
+    step = next(s for s in load_workflow()["jobs"]["testflight"]["steps"] if s.get("name") == "Upload to TestFlight")
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    uploader = tools / "xcodebuild"
+    uploader.write_text("#!/bin/sh\nexit 0\n")  # ExportOptions are real; never upload a fixture.
+    uploader.chmod(0o755)
+    env = {**os.environ, "PATH": str(tools) + os.pathsep + os.environ["PATH"],
+           "RUNNER_TEMP": str(tmp_path), "TESTFLIGHT_AUDIENCE": audience, "TEAM_ID": "fixture-team",
+           "ASC_KEY_ID": "fixture-key", "ASC_ISSUER_ID": "fixture-issuer"}
+    result = subprocess.run(["bash", "-e", "-c", step["run"]], env=env, cwd=tmp_path,
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    options = plistlib.loads((tmp_path / "ExportOptions.plist").read_bytes())
+    assert options["testFlightInternalTestingOnly"] is internal_only
+    assert options["method"] == "app-store-connect" and options["destination"] == "upload"
+    assert options["manageAppVersionAndBuildNumber"] is False
+
+
+@pytest.mark.skipif(not Path("/usr/libexec/PlistBuddy").is_file(), reason="TestFlight uploader runs on macOS")
+def test_upload_rejects_unknown_audience_before_export(tmp_path):
+    step = next(s for s in load_workflow()["jobs"]["testflight"]["steps"] if s.get("name") == "Upload to TestFlight")
+    result = subprocess.run(["bash", "-e", "-c", step["run"]],
+                            env={**os.environ, "RUNNER_TEMP": str(tmp_path), "TESTFLIGHT_AUDIENCE": "unrecognized"},
+                            cwd=tmp_path, capture_output=True, text=True, timeout=20)
+    assert result.returncode != 0
+    assert "Unsupported TestFlight audience" in result.stdout
+    assert not (tmp_path / "ExportOptions.plist").exists()

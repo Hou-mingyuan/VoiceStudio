@@ -28,6 +28,8 @@ from services.speaker_clone import (
     build_cast_sources,
     extract_segment_refs,
     extract_speaker_clones,
+    speakers_without_source,
+    voice_fallback_warning,
 )
 
 SR = 16000
@@ -125,6 +127,182 @@ def test_sync_transcribe_splits_turns_at_the_speaker_boundary(tmp_path, monkeypa
     ]
 
 
+def _voice(duration_s, f0=140.0, amp=0.5):
+    """Harmonic-rich voiced tone, a stand-in for a vowel."""
+    t = np.arange(int(duration_s * SR)) / SR
+    x = sum(np.sin(2 * np.pi * f0 * k * t) / k for k in range(1, 8))
+    return (amp * x / np.max(np.abs(x))).astype(np.float32)
+
+
+def _whisper(duration_s, amp=0.3, seed=3):
+    """Band-limited noise: the spectrum of a whispered (unvoiced) reply."""
+    rng = np.random.default_rng(seed)
+    n = int(duration_s * SR)
+    spec = np.fft.rfft(rng.standard_normal(n))
+    freqs = np.fft.rfftfreq(n, 1 / SR)
+    spec[(freqs < 500) | (freqs > 3000)] = 0
+    x = np.fft.irfft(spec, n)
+    return (amp * x / np.max(np.abs(x))).astype(np.float32)
+
+
+def _voiced_then_whispered():
+    """Voiced 0–1.3 s ("Hello, how are you?"), whispered 1.4–2.4 s ("Good, and you?")."""
+    return np.concatenate([_voice(1.3), np.zeros(SR // 10, np.float32),
+                           _whisper(1.0), np.zeros(int(0.6 * SR), np.float32)])
+
+
+def _whispered_then_voiced():
+    """Whispered 0–1.3 s ("Hello, how are you?"), voiced 1.4–2.4 s ("Good, and you?")."""
+    return np.concatenate([_whisper(1.3), np.zeros(SR // 10, np.float32),
+                           _voice(1.0), np.zeros(int(0.6 * SR), np.float32)])
+
+
+def _check_voiced_then_whispered(segments):
+    first, reply = segments
+    assert first["end"] < 1.6  # the voiced line still ends on its speech
+    assert reply["end"] == pytest.approx(2.4)  # whispered: no voiced anchor
+
+
+def _check_whispered_then_voiced(segments):
+    # Snapping the shared segment's start to the first voiced onset (~1.4 s)
+    # before the re-split cut the whispered speaker's words out of it.
+    first, reply = segments
+    assert first["start"] < 0.2
+    assert reply["start"] == pytest.approx(1.4, abs=0.1)
+
+
+SHARED_LINE_CASES = [
+    pytest.param(_voiced_then_whispered, _check_voiced_then_whispered, id="whispered-reply"),
+    pytest.param(_whispered_then_voiced, _check_whispered_then_voiced, id="whispered-opener"),
+]
+
+
+@pytest.mark.usefixtures("asr_model_installed")
+@pytest.mark.parametrize("make_vocals, check", SHARED_LINE_CASES)
+def test_sync_transcribe_keeps_a_whispered_speaker_sharing_a_voiced_line(
+    tmp_path, monkeypatch, make_vocals, check,
+):
+    # One ASR segment holding a voiced and a whispered speaker. Snapping its
+    # start or trimming its end to voiced speech before the speaker re-split
+    # cut the whispered speaker's words out. Both edges are now aligned per
+    # speaker line, after the re-split.
+    from api.routers import dub_core as dc
+
+    audio = tmp_path / "audio.wav"
+    vocals = tmp_path / "vocals.wav"
+    sf.write(str(audio), np.zeros(3 * SR, dtype=np.float32), SR)
+    sf.write(str(vocals), make_vocals(), SR)
+    job = {"audio_path": str(audio), "vocals_path": str(vocals), "duration": 3.0,
+           "segments": None, "scene_cuts": []}
+
+    class _ASR:
+        id = "fake"
+
+        def transcribe(self, path, word_timestamps=True):
+            return _whisper_result()
+
+        def unload(self):
+            pass
+
+    monkeypatch.setattr("services.asr_backend.load_active_asr_backend",
+                        lambda **_kw: _ASR())
+    monkeypatch.setattr(dc, "_get_job", lambda _id: job)
+    monkeypatch.setattr(dc, "_save_job", lambda *a, **k: None)
+    monkeypatch.setattr(dc, "should_preload_tts_asr", lambda: False)
+    monkeypatch.setattr(dc, "_ensure_diarisation_accepted", lambda: None)
+    monkeypatch.setattr(dc, "get_diarization_pipeline", lambda: lambda *_a, **_k: DIAR)
+
+    out = asyncio.run(dc.dub_transcribe("job-3419-whisper"))
+
+    assert _speakers(out["segments"]) == [
+        ("Hello, how are you?", "Speaker 1"),
+        ("Good, and you?", "Speaker 2"),
+    ]
+    check(out["segments"])
+
+
+def _stream_events(tmp_path, monkeypatch, vocals_audio, job_id="job-3419-sse"):
+    """Run the SSE transcribe on WORDS + DIAR and return its events in order."""
+    import json
+    from unittest.mock import MagicMock
+
+    from api.routers import dub_core as dc
+
+    audio = tmp_path / "audio.wav"
+    vocals = tmp_path / "vocals.wav"
+    sf.write(str(audio), np.zeros(3 * SR, dtype=np.float32), SR)
+    sf.write(str(vocals), vocals_audio, SR)
+    dc._dub_jobs[job_id] = {"audio_path": str(audio), "vocals_path": str(vocals),
+                            "scene_cuts": []}
+
+    class _ASR:
+        id = "fake"
+
+        def ensure_loaded(self):
+            pass
+
+        def transcribe(self, path, word_timestamps=True):
+            # The streaming path reads word-level chunks.
+            return {"language": "en",
+                    "chunks": [{"text": w, "timestamp": (a, b)} for w, a, b in WORDS]}
+
+        def unload(self):
+            pass
+
+    model = MagicMock()
+
+    async def _model():
+        return model
+
+    monkeypatch.setattr(dc, "get_model", _model)
+    monkeypatch.setattr("services.asr_backend.get_active_asr_backend", lambda *a, **k: _ASR())
+    pipe = lambda *_a, **_k: DIAR  # noqa: E731
+    monkeypatch.setattr(dc, "get_diarization_pipeline",
+                        lambda return_error=False: (pipe, None) if return_error else pipe)
+    monkeypatch.setattr(dc, "offload_tts_for_asr", lambda *a, **k: None)
+    monkeypatch.setattr(dc, "restore_tts_after_asr", lambda *a, **k: None)
+    monkeypatch.setattr(dc, "_save_job", lambda *a, **k: None)
+    monkeypatch.setattr("services.token_resolver.resolve", lambda *a, **k: None)
+
+    async def _collect():
+        resp = await dc.dub_transcribe_stream(job_id)
+        return "".join([c.decode() if isinstance(c, (bytes, bytearray)) else str(c)
+                        async for c in resp.body_iterator])
+
+    try:
+        body = asyncio.run(_collect())
+    finally:
+        dc._dub_jobs.pop(job_id, None)
+    assert "event: final" in body, body[-1500:]
+    events = []
+    for block in body.split("\n\n"):
+        name = data = None
+        for line in block.split("\n"):
+            if line.startswith("event:"):
+                name = line[len("event:"):].strip()
+            elif line.startswith("data:"):
+                data = json.loads(line[len("data:"):])
+        if name:
+            events.append((name, data))
+    return events
+
+
+@pytest.mark.usefixtures("asr_model_installed")
+@pytest.mark.parametrize("make_vocals, check", SHARED_LINE_CASES)
+def test_stream_transcribe_keeps_a_whispered_speaker_sharing_a_voiced_line(
+    tmp_path, monkeypatch, make_vocals, check,
+):
+    # Same shape on the SSE path: the per-chunk pass aligned the shared
+    # segment before the final diarization re-split.
+    events = _stream_events(tmp_path, monkeypatch, make_vocals())
+    segments = next(data for name, data in events if name == "final")["segments"]
+    assert _speakers(segments) == [
+        ("Hello, how are you?", "Speaker 1"),
+        ("Good, and you?", "Speaker 2"),
+    ]
+    check(segments)
+
+
 # ── Every diarized speaker gets a clone ─────────────────────────────────────
 
 A_LEVEL, B_LEVEL = 0.9, -0.4
@@ -175,6 +353,87 @@ def test_speaker_with_too_little_clean_audio_still_falls_back(tmp_path):
     clones = extract_speaker_clones(vocals, segments, str(tmp_path / "refs"),
                                     labels_source="pyannote")
     assert set(clones) == {"Speaker 1"}
+
+
+def test_voice_fallback_warning_names_speakers_without_a_source():
+    segments = [{"speaker_id": "Speaker 1"}, {"speaker_id": "Speaker 2"},
+                {"speaker_id": "Speaker 3"}, {"speaker_id": "Speaker 2"}, {}]
+    sources = {"Speaker 1": {"kind": "speaker"}}
+    assert speakers_without_source(segments, sources) == ["Speaker 2", "Speaker 3"]
+    warning = voice_fallback_warning(segments, sources)
+    assert warning["source"] == "speaker_clone"
+    assert warning["fallback_speakers"] == ["Speaker 2", "Speaker 3"]
+    assert "Speaker 2, Speaker 3" in warning["detail"]
+    assert voice_fallback_warning(segments, {**sources, "Speaker 2": {}, "Speaker 3": {}}) is None
+
+
+def test_a_line_with_a_chosen_voice_is_not_named_as_default():
+    # After speaker re-analysis `rebind` keeps a voice the user chose; that
+    # speaker must not be reported as using the default voice.
+    segments = [{"speaker_id": "Speaker 1", "profile_id": "auto:speaker_1"},
+                {"speaker_id": "Speaker 2", "profile_id": "my-voice"},
+                {"speaker_id": "Speaker 3", "profile_id": ""}]
+    assert speakers_without_source(segments, {"Speaker 1": {}}) == ["Speaker 3"]
+
+
+def test_retry_after_completed_transcript_replays_the_voice_warning(monkeypatch):
+    import json
+    from api.routers import dub_core as dc
+
+    dc._dub_jobs["job-3419-retry"] = {
+        "transcription_complete": True,
+        "segments": [{"speaker_id": "Speaker 1", "profile_id": "auto:speaker_1"},
+                     {"speaker_id": "Speaker 2"}],
+        "cast_sources": {"Speaker 1": {}},
+    }
+
+    async def _collect():
+        resp = await dc.dub_transcribe_stream("job-3419-retry")
+        return "".join([c.decode() if isinstance(c, (bytes, bytearray)) else str(c)
+                        async for c in resp.body_iterator])
+
+    try:
+        body = asyncio.run(_collect())
+    finally:
+        dc._dub_jobs.pop("job-3419-retry", None)
+    assert "event: final" in body
+    warnings = [json.loads(b.split("data:", 1)[1]) for b in body.split("\n\n")
+                if b.startswith("event: warning")]
+    assert [w["fallback_speakers"] for w in warnings] == [["Speaker 2"]]
+    assert body.index("event: final") < body.index("event: warning") < body.index("event: done")
+
+
+@pytest.mark.usefixtures("asr_model_installed")
+def test_stream_transcribe_says_which_speakers_fell_back(tmp_path, monkeypatch):
+    # Speaker 2 has too little clean speech for any reference. Their lines
+    # must keep the default voice, never Speaker 1's clone, and the result
+    # must name them instead of falling back silently.
+    from services import speaker_clone
+
+    ref = tmp_path / "voice_speaker_1.wav"
+    sf.write(str(ref), np.full(SR, A_LEVEL, dtype=np.float32), SR)
+
+    def _only_speaker_1(_vocals, segments, _out, **_kw):
+        assert {s["speaker_id"] for s in segments} == {"Speaker 1", "Speaker 2"}
+        return {"Speaker 1": {"ref_audio": str(ref), "ref_text": "x",
+                              "duration": 6.0, "source_count": 2}}
+
+    monkeypatch.setattr(speaker_clone, "extract_speaker_clones", _only_speaker_1)
+    monkeypatch.setattr(speaker_clone, "extract_segment_refs", lambda *a, **k: {})
+    monkeypatch.setattr(speaker_clone, "refine_ref_texts", lambda clones, _asr: clones)
+
+    events = _stream_events(tmp_path, monkeypatch, np.zeros(3 * SR, dtype=np.float32),
+                            job_id="job-3419-fallback")
+
+    final = next(data for name, data in events if name == "final")
+    voices = {s["speaker_id"]: s.get("profile_id") for s in final["segments"]}
+    assert voices == {"Speaker 1": "auto:speaker_1", "Speaker 2": None}
+    assert set(final["cast_sources"]) == {"Speaker 1"}
+    fallbacks = [data for name, data in events
+                 if name == "warning" and data.get("fallback_speakers")]
+    assert [w["fallback_speakers"] for w in fallbacks] == [["Speaker 2"]]
+    order = [data for _, data in events]
+    assert order.index(fallbacks[0]) < order.index(final)
 
 
 def test_line_with_another_speaker_inside_is_not_used(tmp_path):

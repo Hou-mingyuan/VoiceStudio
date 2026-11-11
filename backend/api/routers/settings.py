@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 from dataclasses import asdict
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -168,7 +169,7 @@ def set_performance_profile(body: _PerformanceProfileBody):
 
 
 class _TorchCompileBody(BaseModel):
-    enabled: bool = Field(..., description="True to disable torch.compile (eager mode) for the engine")
+    enabled: bool = Field(..., description="True disables torch.compile and selects eager execution")
 
 
 def _torch_compile_state() -> dict:
@@ -181,22 +182,13 @@ def _torch_compile_state() -> dict:
 
 @router.get("/perf/torch-compile-disabled")
 def get_torch_compile_disabled():
-    """Return the current torch.compile-disabled toggle + the runtime platform.
-
-    `platform` is still reported (clients may show it), but since #2135 the
-    toggle is live on every host: it used to be rendered disabled off Windows
-    on the assumption that only #65's Windows OOM needed it, which left the
-    Linux/CUDA reporter of #2135 with no way to switch off the compile that
-    was killing their backend.
-    """
+    """Return the cross-platform compile-disable toggle and runtime platform."""
     return _torch_compile_state()
 
 
 @router.put("/perf/torch-compile-disabled")
 def set_torch_compile_disabled(body: _TorchCompileBody):
-    """Persist the toggle. Honoured by `services.engine_env.build_engine_env()`
-    (subprocess engines) and `services.engine_env.should_torch_compile()`
-    (in-process), on every platform since #2135."""
+    """Persist the toggle used by subprocess environments and in-process compile gates on every host."""
     from services import settings_store
 
     try:
@@ -250,6 +242,139 @@ def set_offload_after_generation(body: _OffloadAfterGenerationBody):
         logger.exception("set_offload_after_generation failed")
         raise HTTPException(status_code=500, detail="Failed to persist setting")
     return _offload_after_generation_state()
+
+
+# ── OmniVoice GGUF resident server (#3654) ────────────────────────────────
+
+
+class _GgufResidentBody(BaseModel):
+    enabled: bool = Field(..., description="True to keep the GGUF runtime loaded between requests")
+
+
+def _gguf_resident_state() -> dict:
+    """`enabled` is the effective value (env > saved > off; opt-in
+    because upstream tts-server has no API key). `available` means a
+    verified tts-server binary is bundled; without one every request spawns the
+    CLI and the toggle has nothing to switch."""
+    from engines.omnivoice_gguf import resident
+
+    return {
+        "enabled": resident.resident_enabled(),
+        "env_pinned": bool(os.environ.get(resident.RESIDENT_ENV)),
+        "available": resident.server_status()[0],
+    }
+
+
+# Verifying the server binary hashes it, so refuse cross-site loads.
+@router.get("/perf/gguf-resident", dependencies=[Depends(reject_cross_site_get)])
+def get_gguf_resident():
+    """Whether the OmniVoice GGUF runtime stays loaded between requests."""
+    return _gguf_resident_state()
+
+
+@router.put("/perf/gguf-resident")
+def set_gguf_resident(body: _GgufResidentBody):
+    """Persist the toggle. Turning it off stops a running server at once."""
+    from core import prefs
+    from engines.omnivoice_gguf import resident
+
+    try:
+        prefs.set_(resident.RESIDENT_PREF, bool(body.enabled))
+    except Exception:
+        logger.exception("set_gguf_resident failed")
+        raise HTTPException(status_code=500, detail="Failed to persist setting")
+    if not resident.resident_enabled():
+        resident.stop_all()
+    return _gguf_resident_state()
+
+
+# ── Pause fill: digital silence or room tone (#3611) ──────────────────────
+
+
+class _PauseFillBody(BaseModel):
+    mode: Literal["silence", "room_tone"] = Field(
+        ..., description="silence: exact zeros (default); room_tone: the take's own noise floor",
+    )
+
+
+def _pause_fill_state() -> dict:
+    """`mode` is the effective value (env > saved > silence). `env_pinned`
+    means OMNIVOICE_PAUSE_FILL decides and a saved value is ignored."""
+    from services import audio_dsp
+
+    return {
+        "mode": audio_dsp.pause_fill_mode(),
+        "env_pinned": bool((os.environ.get(audio_dsp.PAUSE_FILL_ENV) or "").strip()),
+        "choices": list(audio_dsp.PAUSE_FILL_MODES),
+    }
+
+
+@router.get("/pause-fill")
+def get_pause_fill():
+    """How [pause] markers and audiobook gaps are filled."""
+    return _pause_fill_state()
+
+
+@router.put("/pause-fill")
+def set_pause_fill(body: _PauseFillBody):
+    """Persist the choice. Applies from the next generation, no restart."""
+    from core import prefs
+    from services import audio_dsp
+
+    try:
+        prefs.set_(audio_dsp.PAUSE_FILL_PREF, body.mode)
+    except Exception:
+        logger.exception("set_pause_fill failed")
+        raise HTTPException(status_code=500, detail="Failed to persist setting")
+    return _pause_fill_state()
+
+
+# ── Dub video export: encoder + maximum resolution (#3732) ────────────────
+
+
+class _VideoExportBody(BaseModel):
+    encoder: Literal["software", "hardware"] | None = Field(
+        None, description="software: libx264 (default); hardware: NVENC/QSV/AMF/VideoToolbox when available",
+    )
+    max_resolution: Literal["original", "2160p", "1440p", "1080p", "720p"] | None = Field(
+        None, description="Cap for dub exports; only ever downscales. original = no cap",
+    )
+
+
+def _video_export_state() -> dict:
+    from services import video_encoder
+    from services.ffmpeg_utils import find_ffmpeg
+
+    ffmpeg = find_ffmpeg()
+    return {
+        "encoder": video_encoder.encoder_mode(),
+        "max_resolution": video_encoder.max_resolution(),
+        "hardware_encoders": list(video_encoder.available_hw_encoders(ffmpeg)) if ffmpeg else [],
+        "resolutions": list(video_encoder.MAX_RESOLUTIONS),
+    }
+
+
+@router.get("/video-export")
+def get_video_export():
+    """How dub video exports are encoded and capped."""
+    return _video_export_state()
+
+
+@router.put("/video-export")
+def set_video_export(body: _VideoExportBody):
+    """Persist either field. Applies from the next export, no restart."""
+    from core import prefs
+    from services import video_encoder
+
+    try:
+        if body.encoder is not None:
+            prefs.set_(video_encoder.ENCODER_PREF, body.encoder)
+        if body.max_resolution is not None:
+            prefs.set_(video_encoder.MAX_RES_PREF, body.max_resolution)
+    except Exception:
+        logger.exception("set_video_export failed")
+        raise HTTPException(status_code=500, detail="Failed to persist setting")
+    return _video_export_state()
 
 
 # ── Compute-device override (Settings → Performance) ──────────────────────
@@ -372,6 +497,7 @@ def _cuda_devices() -> list[dict]:
             ],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=3,
             check=False,
         )
@@ -610,6 +736,8 @@ class _LLMProviderBody(BaseModel):
     base_url: str | None = None
     model: str | None = None
     account_id: str | None = Field(None, description="Cloudflare account id")
+    allow_plain_http: bool | None = Field(
+        None, description="Allow an API key over plain HTTP to a private-IP LAN host")
     make_active: bool = False
     activate_if_unset: bool = True  # Legacy clients; editors opt out for save/test.
 
@@ -654,7 +782,7 @@ def save_llm_provider(provider_id: str, body: _LLMProviderBody):
         llm_providers.save_key(provider_id, body.api_key.strip())
     llm_providers.save_overrides(
         provider_id, base_url=body.base_url, model=body.model,
-        account_id=body.account_id,
+        account_id=body.account_id, allow_plain_http=body.allow_plain_http,
     )
     # An explicit save also claims the active slot when the user has never
     # chosen a provider (#963). Without this, a saved-and-tested local
@@ -1039,6 +1167,10 @@ class _ModelsDirBody(BaseModel):
     authorization: str = Field(description="One-shot native desktop authorization")
 
 
+class _LocalModelBody(BaseModel):
+    authorization: str = Field(description="One-shot native desktop authorization")
+
+
 @router.get("/storage/models-dir")
 def get_models_dir():
     """Current models directory: the persisted choice (from the durable env
@@ -1098,6 +1230,90 @@ def set_models_dir(body: _ModelsDirBody):
 
     user_env.set_user_env(_MODELS_DIR_ENV, path)
     return {"configured": path, "effective": _effective_models_dir(), "restart_required": True}
+
+
+@router.get("/engines/{family}/{engine_id}/local-model")
+def get_local_model(family: str, engine_id: str):
+    from services import local_model_paths
+    if not local_model_paths.supported(family, engine_id):
+        raise HTTPException(404, "This engine does not support local model folders")
+    return local_model_paths.state(family, engine_id)
+
+
+async def _change_local_model(family: str, engine_id: str, path: str | None):
+    from services import local_model_paths, model_manager
+    from core.path_authorization import PathAuthorizationError
+    # This lock is the same exclusion held by OmniVoice generation/load routes.
+    # Reject instead of waiting indefinitely behind a long synthesis.
+    if model_manager._model_lock.locked():
+        raise HTTPException(409, "An engine is busy; wait for generation to finish")
+    async with model_manager._model_lock:
+        def change_in_worker():
+            # The RLock must be acquired and released on the worker thread.
+            lock = model_manager._model_load_thread_lock
+            if not lock.acquire(blocking=False):
+                raise HTTPException(409, "An engine is loading; try again when it finishes")
+            try:
+                return local_model_paths.change(family, engine_id, path)
+            finally:
+                lock.release()
+
+        try:
+            return await model_manager.run_release(change_in_worker)
+        except PathAuthorizationError as exc:
+            raise HTTPException(403, detail=str(exc)) from exc
+        except local_model_paths.EngineBusyError as exc:
+            raise HTTPException(409, detail=str(exc)) from exc
+        except local_model_paths.LocalModelError as exc:
+            raise HTTPException(400, detail=str(exc)) from exc
+
+
+@router.put("/engines/{family}/{engine_id}/local-model")
+async def set_local_model(family: str, engine_id: str, body: _LocalModelBody):
+    from core.path_authorization import PathAuthorizationError, consume
+    from services import local_model_paths
+    if not local_model_paths.supported(family, engine_id):
+        raise HTTPException(404, "This engine does not support local model folders")
+    try:
+        raw = consume(body.authorization, "models_dir", expected_scope=f"local-model:{family}:{engine_id}")
+    except PathAuthorizationError as exc:
+        raise HTTPException(403, detail=str(exc)) from exc
+    except local_model_paths.LocalModelError as exc:
+        raise HTTPException(400, detail=str(exc)) from exc
+    return await _change_local_model(family, engine_id, raw)
+
+
+@router.post("/engines/{family}/{engine_id}/local-model/discover")
+def discover_local_models(family: str, engine_id: str, body: _LocalModelBody):
+    """List direct child checkpoint candidates under one native-authorized folder.
+
+    Discovery is read-only: it never persists a candidate, loads an engine, or
+    downloads missing files. The capability is consumed even on failure.
+    """
+    from core.path_authorization import PathAuthorizationError, consume
+    from services import local_model_paths
+    if not local_model_paths.supported(family, engine_id):
+        raise HTTPException(404, "This engine does not support local model folders")
+    try:
+        parent = consume(body.authorization, "models_dir", expected_scope=f"local-model-discover:{engine_id}")
+        result = local_model_paths.discover(family, engine_id, parent)
+        from core.path_authorization import issue_local_model_selection
+        for candidate in result["candidates"]:
+            if candidate["validation"]["status"] == "valid":
+                candidate["authorization"] = issue_local_model_selection(candidate["path"], family, engine_id)
+        return result
+    except PathAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except local_model_paths.LocalModelError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/engines/{family}/{engine_id}/local-model")
+async def clear_local_model(family: str, engine_id: str):
+    from services import local_model_paths
+    if not local_model_paths.supported(family, engine_id):
+        raise HTTPException(404, "This engine does not support local model folders")
+    return await _change_local_model(family, engine_id, None)
 
 
 # ── Storage report (Settings → Storage) ────────────────────────────────────
@@ -1468,6 +1684,21 @@ def get_analytics():
         # enables anything by itself.
         "prompted": analytics.user_prompted(),
     }
+
+
+class _UiEventBody(BaseModel):
+    event: str = Field(..., max_length=64)
+    props: dict = Field(default_factory=dict)
+    screen: str | None = Field(default=None, max_length=96)
+
+
+@router.post("/analytics/event")
+def post_analytics_event(body: _UiEventBody):
+    """An event the interface reports. A no-op unless the user opted in; only
+    allowlisted, content-free properties are forwarded."""
+    from core import analytics
+
+    return {"sent": analytics.capture_from_ui(body.event, body.props, body.screen)}
 
 
 @router.put("/analytics")

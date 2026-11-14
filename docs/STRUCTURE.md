@@ -35,8 +35,9 @@ VoiceStudio/
 │   ├── api/routers/             45 routers, auto-included; HTTP/WS adaptation stays thin here
 │   │   └── setup/               setup-wizard endpoints and model acquisition
 │   ├── core/                    shared infrastructure: configuration, persistence, job/event plumbing,
-│   │                            auth and CSRF, safe paths, analytics consent, version and diagnostics
-│   ├── services/                131 modules of business logic spanning speech, dubbing, DSP, GPU dispatch,
+│   │                            auth and CSRF, safe paths, model artifact fingerprints, analytics consent,
+│   │                            version and diagnostics
+│   ├── services/                134 modules of business logic spanning speech, dubbing, DSP, GPU dispatch,
 │   │                            engine selection and loaded-model ownership
 │   ├── engines/                 per-engine adapters: audiocpp, confucius4, cosyvoice_gguf,
 │   │                            cosyvoice_subprocess, dots_tts, indextts, ming_tts, moss_sfx,
@@ -54,8 +55,8 @@ VoiceStudio/
 │   ├── src/main/                lifecycle, backend supervisor, runtime setup, updater, native IPC
 │   ├── src/preload/             typed contextBridge → window.voicestudio
 │   ├── src/renderer/            desktop React app: routes/, features/, components/, i18n/locales/
-│   ├── src/shared/              modules shared by the desktop and browser builds (api/, i18n/,
-│   │                            store/, ui/, utils/) — not a runnable app
+│   ├── src/shared/              modules shared by the desktop and browser builds (api/, store/,
+│   │                            utils/) — not a runnable app
 │   ├── tests/                   packaged-app, installer and workflow smoke tests
 │   ├── build/                   packaging inputs: icons, entitlements, Info.plist
 │   ├── scripts/                 dev launcher, AppImage update-info embedding
@@ -80,7 +81,6 @@ VoiceStudio/
 │   ├── conftest.py              redirects OMNIVOICE_DATA_DIR to disposable state for the whole session
 │   ├── backend/ / scripts/      path-shaped coverage for those source areas
 │   ├── smoke/                   quick end-to-end gates; isolated CI job runs with HF_HUB_OFFLINE=1
-│   ├── evals/                   evals.yml-driven output-quality checks
 │   ├── probe/ / fixtures/       diagnostic probes and reusable inputs
 │   └── frontend/                retained node:test suite for utilities and developer tooling
 │
@@ -129,7 +129,7 @@ VoiceStudio/
 │                                   DB + HF cache live here when running via compose
 │
 ├── .github/workflows/           ⟵ ci, electron-build, electron-release, docker, security,
-│                                   docs-drift, evals, install-smoke, build-omnivoice-tts,
+│                                   docs-drift, install-smoke, build-omnivoice-tts,
 │                                   cla, commit-identity, cosyvoice-dependencies
 └── .git/
 ```

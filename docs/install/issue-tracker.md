@@ -2,7 +2,7 @@
 
 Every known install problem, merged into unique issues and ranked by severity. For help with a failure, start with the [troubleshooting guide](troubleshooting.md). Live discussion is in [#3836](https://github.com/debpalash/VoiceStudio/issues/3836).
 
-This list covers 515 GitHub reports, merged into 55 unique issues, as of 2026-11-06. The latest release is v0.5.8.
+This list covers 518 GitHub reports, merged into 56 unique issues. The base inventory was reviewed on 2026-11-06; Discord follow-up reports were added on 2026-11-14. The latest release is v0.5.8.
 
 ## How to read this list
 
@@ -50,10 +50,10 @@ Each category has a GitHub label, and every report below carries it.
 
 | Status | Unique issues |
 |---|---|
-| Open | 8 |
-| Partly fixed | 10 |
+| Open | 9 |
+| Partly fixed | 12 |
 | Fixed on main | 0 |
-| Fixed in release | 34 |
+| Fixed in release | 32 |
 | Declined | 1 |
 | Closed, cause unknown | 2 |
 
@@ -63,7 +63,7 @@ Each category has a GitHub label, and every report below carries it.
 |---|---|---|---|---|---|---|---|---|
 | 1 | `INST-WIN-001` | P0 | Windows Smart App Control or antivirus blocks the unsigned Python files (`spawn UNKNOWN`) | Partly fixed | [#3640](https://github.com/debpalash/VoiceStudio/pull/3640), [#3810](https://github.com/debpalash/VoiceStudio/pull/3810) | Needs signed Python files ([#1779](https://github.com/debpalash/VoiceStudio/issues/1779)). Turning off Smart App Control works today. The merged PRs only warn and name the block. | [`WINDOWS_APP_CONTROL_BLOCKED`](troubleshooting.md#windows_app_control_blocked) | 53 |
 | 2 | `INST-NATIVE-001` | P0 | Windows backend crashes with an access violation while loading torch or model data | Partly fixed | [#2467](https://github.com/debpalash/VoiceStudio/pull/2467), [#2499](https://github.com/debpalash/VoiceStudio/pull/2499), [#3385](https://github.com/debpalash/VoiceStudio/pull/3385) | Find the root cause in torch model loading. [#3507](https://github.com/debpalash/VoiceStudio/pull/3507) covers a different setup crash. | [`NATIVE_ACCESS_VIOLATION`](troubleshooting.md#native_access_violation) | 16 |
-| 3 | `INST-NET-001` | P0 | Torch or dependency download stalls, restarts or fails on slow or restricted networks | Fixed in release | [#3557](https://github.com/debpalash/VoiceStudio/pull/3557), [#3576](https://github.com/debpalash/VoiceStudio/pull/3576), [#3785](https://github.com/debpalash/VoiceStudio/pull/3785) | Retest on the next release, then close the open reports. | [`RUNTIME_DOWNLOAD_STALLED`](troubleshooting.md#runtime_download_stalled) | 12 |
+| 3 | `INST-NET-001` | P0 | Torch or dependency download stalls, restarts or fails on slow or restricted networks | Partly fixed | [#3557](https://github.com/debpalash/VoiceStudio/pull/3557), [#3576](https://github.com/debpalash/VoiceStudio/pull/3576), [#3785](https://github.com/debpalash/VoiceStudio/pull/3785) | Validate the Auto-region PyPI DNS failover and accurate failed-host report for #4105. | [`RUNTIME_DOWNLOAD_STALLED`](troubleshooting.md#runtime_download_stalled) | 13 |
 | 4 | `INST-MAC-001` | P0 | macOS says the app is damaged or will not open it after install | Fixed in release | [#3033](https://github.com/debpalash/VoiceStudio/pull/3033), [#3243](https://github.com/debpalash/VoiceStudio/pull/3243) |  | [`GATEKEEPER_QUARANTINE`](troubleshooting.md#gatekeeper_quarantine) | 9 |
 | 5 | `INST-BOOT-001` | P1 | Port 3900 is already in use or cannot be bound | Partly fixed | [#1982](https://github.com/debpalash/VoiceStudio/pull/1982), [#2362](https://github.com/debpalash/VoiceStudio/pull/2362), [#3025](https://github.com/debpalash/VoiceStudio/pull/3025) | Reserved ports now recover, but a port held by another app still stops startup. Pick a free port instead. | [`PORT_IN_USE`](troubleshooting.md#port_in_use) | 7 |
 | 6 | `INST-AMD-001` | P1 | System check reports `ROCm not configured`, or Linux ROCm setup fails | Partly fixed | [#3553](https://github.com/debpalash/VoiceStudio/pull/3553), [#3602](https://github.com/debpalash/VoiceStudio/pull/3602) | Setup still asks for an environment variable on AMD. Offer ROCm in setup. | [`ROCM_NOT_CONFIGURED`](troubleshooting.md#rocm_not_configured) | 7 |
@@ -91,31 +91,32 @@ Each category has a GitHub label, and every report below carries it.
 | 28 | `INST-DOCK-001` | P1 | Docker image fails to build or start | Fixed in release | [#27](https://github.com/debpalash/VoiceStudio/pull/27), [#2072](https://github.com/debpalash/VoiceStudio/pull/2072) |  | [docker.md](docker.md) | 3 |
 | 29 | `INST-UPD-001` | P1 | App will not start after an update | Fixed in release | [#1754](https://github.com/debpalash/VoiceStudio/pull/1754) |  |  | 1 |
 | 30 | `INST-MAC-002` | P1 | Intel Macs cannot install torch for the local backend | Declined |  | Intel Macs run the app with a remote backend, as [macos.md](macos.md) explains. | [`UNSUPPORTED_PLATFORM`](troubleshooting.md#unsupported_platform) | 5 |
-| 31 | `INST-SRC-001` | P2 | Running from source: Python environment missing or incomplete | Partly fixed | [#2602](https://github.com/debpalash/VoiceStudio/pull/2602) | Waiting on reporter details ([#3589](https://github.com/debpalash/VoiceStudio/issues/3589)). | [`SOURCE_ENV_INCOMPLETE`](troubleshooting.md#source_env_incomplete) | 12 |
-| 32 | `INST-AMD-004` | P2 | Windows ROCm: remaining engine parity gaps | Partly fixed | [#3045](https://github.com/debpalash/VoiceStudio/pull/3045) | Close the remaining engine gaps. Open: [#3734](https://github.com/debpalash/VoiceStudio/pull/3734), and [#3486](https://github.com/debpalash/VoiceStudio/pull/3486) (waiting on a CLA). | [windows-rocm.md](windows-rocm.md) | 2 |
-| 33 | `INST-WIN-004` | P2 | Windows Defender blocks state saves, so the latest crash record is lost | Open |  | Review open [#3708](https://github.com/debpalash/VoiceStudio/pull/3708). | [`ANTIVIRUS_BLOCKED`](troubleshooting.md#antivirus_blocked) | 1 |
-| 34 | `INST-LNX-002` | P2 | The app will not open on NixOS | Open |  | Find why the app fails on NixOS. | [nix.md](nix.md) | 1 |
-| 35 | `INST-AMD-005` | P2 | Windows RDNA 2 needs working native torch, readiness checks and a safe CPU fallback | Open |  | Review open [#3712](https://github.com/debpalash/VoiceStudio/pull/3712). | [windows-rocm.md](windows-rocm.md) | 1 |
-| 36 | `INST-AMD-006` | P2 | Windows Vulkan detection times out on hidden probes | Open |  | Review open [#3648](https://github.com/debpalash/VoiceStudio/pull/3648). |  | 1 |
-| 37 | `INST-UX-001` | P2 | First-run setup screens block or mislead (`All good` greyed out, repeated steps) | Fixed in release | [#1992](https://github.com/debpalash/VoiceStudio/pull/1992), [#3378](https://github.com/debpalash/VoiceStudio/pull/3378), [#3595](https://github.com/debpalash/VoiceStudio/pull/3595) | Ships in the next release. |  | 14 |
-| 38 | `INST-WIN-005` | P2 | Windows installer claims VoiceStudio is still running or fails to finish | Fixed in release | [#3621](https://github.com/debpalash/VoiceStudio/pull/3621), [#3624](https://github.com/debpalash/VoiceStudio/pull/3624), [#3636](https://github.com/debpalash/VoiceStudio/pull/3636) | Ships in the next release. |  | 6 |
-| 39 | `INST-ENG-002` | P2 | Other engine installs fail (Confucius4, dots.tts, Nemo, pyannote, translation) | Fixed in release | [#2173](https://github.com/debpalash/VoiceStudio/pull/2173), [#2181](https://github.com/debpalash/VoiceStudio/pull/2181), [#2484](https://github.com/debpalash/VoiceStudio/pull/2484) |  |  | 11 |
-| 40 | `INST-LNX-003` | P2 | Linux packages: deb file conflict, libfuse, updates and microphones | Fixed in release | [#93](https://github.com/debpalash/VoiceStudio/pull/93), [#1681](https://github.com/debpalash/VoiceStudio/pull/1681), [#2329](https://github.com/debpalash/VoiceStudio/pull/2329) |  | [Section 7](troubleshooting.md#7-deb-ffprobe-path-conflict-on-upgrade) | 7 |
-| 41 | `INST-DEP-001` | P2 | FFmpeg is missing or not detected during setup | Fixed in release | [#716](https://github.com/debpalash/VoiceStudio/pull/716), [#1311](https://github.com/debpalash/VoiceStudio/pull/1311), [#2353](https://github.com/debpalash/VoiceStudio/pull/2353) |  | [Section 7b](troubleshooting.md#7b-media-engine-unavailable--ffmpeg-questions) | 6 |
-| 42 | `INST-DOCK-002` | P2 | Docker: remote browsers, loopback checks and the share PIN block access | Fixed in release | [#93](https://github.com/debpalash/VoiceStudio/pull/93), [#1673](https://github.com/debpalash/VoiceStudio/pull/1673), [#3401](https://github.com/debpalash/VoiceStudio/pull/3401) |  | [Section 8](troubleshooting.md#8-docker-lan-access--media-preview-404) | 4 |
-| 43 | `INST-NATIVE-005` | P2 | Backend exits with a stack buffer overrun on Windows | Fixed in release | [#1401](https://github.com/debpalash/VoiceStudio/pull/1401), [#2907](https://github.com/debpalash/VoiceStudio/pull/2907) |  | [`NATIVE_CRASH`](troubleshooting.md#native_crash) | 4 |
-| 44 | `INST-ENG-003` | P2 | IndexTTS: one-click install builds the wrong environment or weights config | Fixed in release | [#2205](https://github.com/debpalash/VoiceStudio/pull/2205), [#2207](https://github.com/debpalash/VoiceStudio/pull/2207), [#2240](https://github.com/debpalash/VoiceStudio/pull/2240) |  | [Section 11](troubleshooting.md#11-indextts--cosyvoice--chatterboxtts-clash) | 3 |
-| 45 | `INST-MAC-003` | P2 | Backend hangs or fails on Apple Silicon during first model load | Fixed in release | [#645](https://github.com/debpalash/VoiceStudio/pull/645), [#1310](https://github.com/debpalash/VoiceStudio/pull/1310), [#1657](https://github.com/debpalash/VoiceStudio/pull/1657) |  |  | 3 |
-| 46 | `INST-DOCK-003` | P2 | Docker: AMD GPU is not detected or has no image | Fixed in release | [#1166](https://github.com/debpalash/VoiceStudio/pull/1166), [#1673](https://github.com/debpalash/VoiceStudio/pull/1673) |  | [docker.md](docker.md) | 2 |
-| 47 | `INST-DOCK-004` | P2 | Docker: no ARM64 image for the host | Fixed in release | [#1988](https://github.com/debpalash/VoiceStudio/pull/1988), [#3402](https://github.com/debpalash/VoiceStudio/pull/3402) | The standard image still has no native ARM64 build: #1988 documents emulation and #3402 adds an NVIDIA image. | [docker.md](docker.md) | 2 |
-| 48 | `INST-ENG-004` | P2 | MOSS-TTS engines cannot install or have no audio backend | Fixed in release | [#2016](https://github.com/debpalash/VoiceStudio/pull/2016), [#2182](https://github.com/debpalash/VoiceStudio/pull/2182) |  |  | 2 |
-| 49 | `INST-BOOT-008` | P2 | Older backend startup reports with no recorded cause (before failure codes) | Closed, cause unknown |  | Root causes are in [#602](https://github.com/debpalash/VoiceStudio/issues/602). | [`BACKEND_STARTUP_FAILED`](troubleshooting.md#backend_startup_failed) | 153 |
-| 50 | `INST-UX-002` | P3 | Setup does not make clear which models allow commercial use | Open |  | Answer the question and decide whether setup should show this. |  | 1 |
-| 51 | `INST-SRC-002` | P3 | Google Colab notebook install breaks | Fixed in release | [#1923](https://github.com/debpalash/VoiceStudio/pull/1923) |  |  | 4 |
-| 52 | `INST-SRC-003` | P3 | Source setup commands fail (`bun run`, Python version, wheels) | Fixed in release | [#1444](https://github.com/debpalash/VoiceStudio/pull/1444), [#2080](https://github.com/debpalash/VoiceStudio/pull/2080) |  |  | 4 |
-| 53 | `INST-DOCK-005` | P3 | Docker: image tags lag behind releases or confuse users | Fixed in release | [#252](https://github.com/debpalash/VoiceStudio/pull/252) |  | [docker.md](docker.md) | 2 |
-| 54 | `INST-UPD-002` | P3 | Uninstall leaves users unsure how to remove the app | Fixed in release | [#1097](https://github.com/debpalash/VoiceStudio/pull/1097) |  | [uninstall.md](uninstall.md) | 1 |
-| 55 | `INST-UX-003` | P3 | Very early install reports with no recorded cause | Closed, cause unknown |  |  |  | 3 |
+| 31 | `INST-UPD-003` | P1 | macOS Restart to update reports a missing updater IPC handler and an unreachable backend | Open |  | Obtain source/target versions and main/backend logs for [#4092](https://github.com/debpalash/VoiceStudio/issues/4092), then reproduce the failed transition. |  | 1 |
+| 32 | `INST-SRC-001` | P2 | Running from source: Python environment missing or incomplete | Partly fixed | [#2602](https://github.com/debpalash/VoiceStudio/pull/2602) | Waiting on reporter details ([#3589](https://github.com/debpalash/VoiceStudio/issues/3589)). | [`SOURCE_ENV_INCOMPLETE`](troubleshooting.md#source_env_incomplete) | 12 |
+| 33 | `INST-AMD-004` | P2 | Windows ROCm: remaining engine parity gaps | Partly fixed | [#3045](https://github.com/debpalash/VoiceStudio/pull/3045) | Close the remaining engine gaps. Open: [#3734](https://github.com/debpalash/VoiceStudio/pull/3734), and [#3486](https://github.com/debpalash/VoiceStudio/pull/3486) (waiting on a CLA). | [windows-rocm.md](windows-rocm.md) | 2 |
+| 34 | `INST-WIN-004` | P2 | Windows Defender blocks state saves, so the latest crash record is lost | Open |  | Review open [#3708](https://github.com/debpalash/VoiceStudio/pull/3708). | [`ANTIVIRUS_BLOCKED`](troubleshooting.md#antivirus_blocked) | 1 |
+| 35 | `INST-LNX-002` | P2 | The app will not open on NixOS | Open |  | Find why the app fails on NixOS. | [nix.md](nix.md) | 1 |
+| 36 | `INST-AMD-005` | P2 | Windows RDNA 2 needs working native torch, readiness checks and a safe CPU fallback | Open |  | Review open [#3712](https://github.com/debpalash/VoiceStudio/pull/3712). | [windows-rocm.md](windows-rocm.md) | 1 |
+| 37 | `INST-AMD-006` | P2 | Windows Vulkan detection times out on hidden probes | Open |  | Review open [#3648](https://github.com/debpalash/VoiceStudio/pull/3648). |  | 1 |
+| 38 | `INST-UX-001` | P2 | First-run setup screens block or mislead (`All good` greyed out, repeated steps) | Fixed in release | [#1992](https://github.com/debpalash/VoiceStudio/pull/1992), [#3378](https://github.com/debpalash/VoiceStudio/pull/3378), [#3595](https://github.com/debpalash/VoiceStudio/pull/3595) | Ships in the next release. |  | 14 |
+| 39 | `INST-WIN-005` | P2 | Windows installer claims VoiceStudio is still running or fails to finish | Partly fixed | [#3621](https://github.com/debpalash/VoiceStudio/pull/3621), [#3624](https://github.com/debpalash/VoiceStudio/pull/3624), [#3636](https://github.com/debpalash/VoiceStudio/pull/3636) | The v0.5.8 NSIS freeze in [#4091](https://github.com/debpalash/VoiceStudio/issues/4091) needs installer logs; its screenshot does not establish the earlier process-matching cause. |  | 7 |
+| 40 | `INST-ENG-002` | P2 | Other engine installs fail (Confucius4, dots.tts, Nemo, pyannote, translation) | Fixed in release | [#2173](https://github.com/debpalash/VoiceStudio/pull/2173), [#2181](https://github.com/debpalash/VoiceStudio/pull/2181), [#2484](https://github.com/debpalash/VoiceStudio/pull/2484) |  |  | 11 |
+| 41 | `INST-LNX-003` | P2 | Linux packages: deb file conflict, libfuse, updates and microphones | Fixed in release | [#93](https://github.com/debpalash/VoiceStudio/pull/93), [#1681](https://github.com/debpalash/VoiceStudio/pull/1681), [#2329](https://github.com/debpalash/VoiceStudio/pull/2329) |  | [Section 7](troubleshooting.md#7-deb-ffprobe-path-conflict-on-upgrade) | 7 |
+| 42 | `INST-DEP-001` | P2 | FFmpeg is missing or not detected during setup | Fixed in release | [#716](https://github.com/debpalash/VoiceStudio/pull/716), [#1311](https://github.com/debpalash/VoiceStudio/pull/1311), [#2353](https://github.com/debpalash/VoiceStudio/pull/2353) |  | [Section 7b](troubleshooting.md#7b-media-engine-unavailable--ffmpeg-questions) | 6 |
+| 43 | `INST-DOCK-002` | P2 | Docker: remote browsers, loopback checks and the share PIN block access | Fixed in release | [#93](https://github.com/debpalash/VoiceStudio/pull/93), [#1673](https://github.com/debpalash/VoiceStudio/pull/1673), [#3401](https://github.com/debpalash/VoiceStudio/pull/3401) |  | [Section 8](troubleshooting.md#8-docker-lan-access--media-preview-404) | 4 |
+| 44 | `INST-NATIVE-005` | P2 | Backend exits with a stack buffer overrun on Windows | Fixed in release | [#1401](https://github.com/debpalash/VoiceStudio/pull/1401), [#2907](https://github.com/debpalash/VoiceStudio/pull/2907) |  | [`NATIVE_CRASH`](troubleshooting.md#native_crash) | 4 |
+| 45 | `INST-ENG-003` | P2 | IndexTTS: one-click install builds the wrong environment or weights config | Fixed in release | [#2205](https://github.com/debpalash/VoiceStudio/pull/2205), [#2207](https://github.com/debpalash/VoiceStudio/pull/2207), [#2240](https://github.com/debpalash/VoiceStudio/pull/2240) |  | [Section 11](troubleshooting.md#11-indextts--cosyvoice--chatterboxtts-clash) | 3 |
+| 46 | `INST-MAC-003` | P2 | Backend hangs or fails on Apple Silicon during first model load | Fixed in release | [#645](https://github.com/debpalash/VoiceStudio/pull/645), [#1310](https://github.com/debpalash/VoiceStudio/pull/1310), [#1657](https://github.com/debpalash/VoiceStudio/pull/1657) |  |  | 3 |
+| 47 | `INST-DOCK-003` | P2 | Docker: AMD GPU is not detected or has no image | Fixed in release | [#1166](https://github.com/debpalash/VoiceStudio/pull/1166), [#1673](https://github.com/debpalash/VoiceStudio/pull/1673) |  | [docker.md](docker.md) | 2 |
+| 48 | `INST-DOCK-004` | P2 | Docker: no ARM64 image for the host | Fixed in release | [#1988](https://github.com/debpalash/VoiceStudio/pull/1988), [#3402](https://github.com/debpalash/VoiceStudio/pull/3402) | The standard image still has no native ARM64 build: #1988 documents emulation and #3402 adds an NVIDIA image. | [docker.md](docker.md) | 2 |
+| 49 | `INST-ENG-004` | P2 | MOSS-TTS engines cannot install or have no audio backend | Fixed in release | [#2016](https://github.com/debpalash/VoiceStudio/pull/2016), [#2182](https://github.com/debpalash/VoiceStudio/pull/2182) |  |  | 2 |
+| 50 | `INST-BOOT-008` | P2 | Older backend startup reports with no recorded cause (before failure codes) | Closed, cause unknown |  | Root causes are in [#602](https://github.com/debpalash/VoiceStudio/issues/602). | [`BACKEND_STARTUP_FAILED`](troubleshooting.md#backend_startup_failed) | 153 |
+| 51 | `INST-UX-002` | P3 | Setup does not make clear which models allow commercial use | Open |  | Answer the question and decide whether setup should show this. |  | 1 |
+| 52 | `INST-SRC-002` | P3 | Google Colab notebook install breaks | Fixed in release | [#1923](https://github.com/debpalash/VoiceStudio/pull/1923) |  |  | 4 |
+| 53 | `INST-SRC-003` | P3 | Source setup commands fail (`bun run`, Python version, wheels) | Fixed in release | [#1444](https://github.com/debpalash/VoiceStudio/pull/1444), [#2080](https://github.com/debpalash/VoiceStudio/pull/2080) |  |  | 4 |
+| 54 | `INST-DOCK-005` | P3 | Docker: image tags lag behind releases or confuse users | Fixed in release | [#252](https://github.com/debpalash/VoiceStudio/pull/252) |  | [docker.md](docker.md) | 2 |
+| 55 | `INST-UPD-002` | P3 | Uninstall leaves users unsure how to remove the app | Fixed in release | [#1097](https://github.com/debpalash/VoiceStudio/pull/1097) |  | [uninstall.md](uninstall.md) | 1 |
+| 56 | `INST-UX-003` | P3 | Very early install reports with no recorded cause | Closed, cause unknown |  |  |  | 3 |
 
 ## Reports for each issue
 
@@ -125,7 +126,7 @@ Open reports are linked. Find a closed report with a search for its number.
 |---|---|
 | `INST-WIN-001` | #3801, #3789, #3788, #3783, #3779, #3778, #3756, #3739, #3714, #3698, #3697, #3696, #3686, [#3683](https://github.com/debpalash/VoiceStudio/issues/3683), [#3682](https://github.com/debpalash/VoiceStudio/issues/3682), [#3681](https://github.com/debpalash/VoiceStudio/issues/3681), #3672, #3668, #3650, [#3635](https://github.com/debpalash/VoiceStudio/issues/3635), #3633, #3632, #3506, #3371, #3351, #3337, #3329, #3326, #3322, #3272, #3224, #3209, #3204, #3201, #3200, #3196, #3169, #3163, #3156, #3146, #3106, #3103, #3084, #3081, #3077, #3063, #3061, #2981, #2959, #2949, #2839, #2440, #1712 |
 | `INST-NATIVE-001` | [#3772](https://github.com/debpalash/VoiceStudio/issues/3772), [#3767](https://github.com/debpalash/VoiceStudio/issues/3767), #3340, #3267, #3226, #3043, #2416, #2394, #2189, #1939, #1927, #1777, #1708, #1669, #1275, #1069 |
-| `INST-NET-001` | [#3820](https://github.com/debpalash/VoiceStudio/issues/3820), [#3748](https://github.com/debpalash/VoiceStudio/issues/3748), [#3720](https://github.com/debpalash/VoiceStudio/issues/3720), #3475, #3444, #3411, #3259, #3202, #3060, #2562, #569, #130 |
+| `INST-NET-001` | [#4105](https://github.com/debpalash/VoiceStudio/issues/4105), [#3820](https://github.com/debpalash/VoiceStudio/issues/3820), [#3748](https://github.com/debpalash/VoiceStudio/issues/3748), [#3720](https://github.com/debpalash/VoiceStudio/issues/3720), #3475, #3444, #3411, #3259, #3202, #3060, #2562, #569, #130 |
 | `INST-MAC-001` | #3264, #3240, #2951, #2829, #2763, #2681, #2360, #79, #54 |
 | `INST-BOOT-001` | [#3704](https://github.com/debpalash/VoiceStudio/issues/3704), #3020, #2358, #1974, #1637, #1635, #1364 |
 | `INST-AMD-001` | [#3780](https://github.com/debpalash/VoiceStudio/issues/3780), #3627, #3158, #1629, #1582, #972, #124 |
@@ -152,6 +153,7 @@ Open reports are linked. Find a closed report with a search for its number.
 | `INST-SCRIPT-001` | #3274, #2973, #2754, #1813, #1626 |
 | `INST-DOCK-001` | #2050, #43, #5 |
 | `INST-UPD-001` | #1749 |
+| `INST-UPD-003` | [#4092](https://github.com/debpalash/VoiceStudio/issues/4092) |
 | `INST-MAC-002` | #3225, #3198, #2598, #2365, #889 |
 | `INST-SRC-001` | [#3722](https://github.com/debpalash/VoiceStudio/issues/3722), [#3589](https://github.com/debpalash/VoiceStudio/issues/3589), #3261, #2988, #2948, #2922, #2787, #2783, #2621, #2555, #2465, #2303 |
 | `INST-AMD-004` | #3123, [#2468](https://github.com/debpalash/VoiceStudio/issues/2468) |
@@ -160,7 +162,7 @@ Open reports are linked. Find a closed report with a search for its number.
 | `INST-AMD-005` | [#3770](https://github.com/debpalash/VoiceStudio/issues/3770) |
 | `INST-AMD-006` | [#3645](https://github.com/debpalash/VoiceStudio/issues/3645) |
 | `INST-UX-001` | #3581, #2940, #1900, #1894, #1886, #1884, #1856, #1851, #1849, #1848, #1847, #1845, #1514, #1496 |
-| `INST-WIN-005` | #3614, #3566, #3115, #1946, #1714, #1140 |
+| `INST-WIN-005` | [#4091](https://github.com/debpalash/VoiceStudio/issues/4091), #3614, #3566, #3115, #1946, #1714, #1140 |
 | `INST-ENG-002` | #3638, #2479, #2163, #2101, #2099, #2019, #1029, #974, #529, #527, #186 |
 | `INST-LNX-003` | #2328, #2327, #2063, #1682, #1680, #1333, #76 |
 | `INST-DEP-001` | #2345, #2215, #2167, #2124, #1309, #712 |

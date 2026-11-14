@@ -192,6 +192,11 @@ def _pick_gpu_workers() -> int:
         except ValueError:
             logger.warning("OMNIVOICE_GPU_WORKERS=%r is not an integer; ignoring", override)
     try:
+        from core.device_caps import gpu_probe_skipped
+
+        # CPU was chosen: one worker, sized without touching a GPU driver (#4006).
+        if gpu_probe_skipped():
+            return 1
         torch = _lazy_torch()
         if hasattr(torch, "cuda") and torch.cuda.is_available():
             free_bytes, _total = torch.cuda.mem_get_info()
@@ -1637,8 +1642,12 @@ def check_device_compatibility():
     ``core.device_caps.arch_unsupported()`` — shared with the probe, and
     CUDA/ROCm-aware (a ROCm build lists ``gfx…``, not ``sm_…`` — #1228).
     """
-    from core.device_caps import arch_unsupported
+    from core.device_caps import arch_unsupported, gpu_probe_skipped
 
+    # CPU was chosen: no GPU is used, and asking CUDA would initialise the
+    # driver that choice avoids (/system/notifications polls this, #4006).
+    if gpu_probe_skipped():
+        return True, None
     torch = _lazy_torch()
     if not torch.cuda.is_available():
         return True, None
@@ -1693,8 +1702,15 @@ def get_best_device():
     """
     from core.device_caps import detect_host_caps
 
+    caps = detect_host_caps()
+    # An explicit CPU choice (Settings, OMNIVOICE_DEVICE=cpu, or the failure
+    # screen's Restart on CPU after a graphics driver crash) means CPU, decided
+    # before any GPU runtime is touched: on a DirectML host the branch below
+    # would otherwise land on the same driver again. The probe skipped GPUs too.
+    if getattr(caps, "requested_family", None) == "cpu":
+        return "cpu"
     torch = _lazy_torch()
-    family = detect_host_caps().family
+    family = caps.family
 
     # ── NVIDIA CUDA or AMD ROCm (both present through torch.cuda) ─────
     if family in ("cuda", "rocm"):
@@ -2694,10 +2710,21 @@ def _load_model_sync():
         from omnivoice.utils.dtype import tts_dtype_name
 
         checkpoint = resolve_omnivoice_checkpoint()
+        # Recovery must identify resident bytes, not weights replaced on disk
+        # after loading. Keep this snapshot on the model that actually loaded.
+        resume_fingerprint = None
+        try:
+            from core.model_fingerprint import tree_fingerprint
+            if os.path.isabs(checkpoint) or os.path.isdir(checkpoint):
+                resume_fingerprint = tree_fingerprint(os.path.realpath(checkpoint))
+        except Exception as err:  # noqa: BLE001 - optional recovery proof
+            logger.debug("Recovery fingerprint unavailable: %s", type(err).__name__)
+        local_fingerprint = None
         if not os.environ.get("OMNIVOICE_MODEL", "").strip():
-            from services.local_model_paths import get, validate
+            from services.local_model_paths import get, loading_fingerprint, validate
             if checkpoint == get("tts", "omnivoice"):
                 validate("tts", "omnivoice", checkpoint)
+                local_fingerprint = loading_fingerprint(checkpoint)
         _set_loading("loading_weights", f"Loading TTS weights on {device}…")
         logger.info("Loading VoiceStudio model on device: %s", device)
         preload_asr = should_preload_tts_asr()
@@ -2998,6 +3025,12 @@ def _load_model_sync():
         # caller timed out. Instance metadata keeps /model/status honest.
         try:
             setattr(_model, "_voicestudio_checkpoint", checkpoint)
+            if resume_fingerprint is not None:
+                # Native loading can read many files. A tree that changed
+                # during that interval cannot certify the resident bytes.
+                if tree_fingerprint(os.path.realpath(checkpoint)) != resume_fingerprint:
+                    resume_fingerprint = None
+            setattr(_model, "_voicestudio_weights_fingerprint", resume_fingerprint)
             setattr(
                 _model,
                 "_voicestudio_loaded_at",
@@ -3009,6 +3042,9 @@ def _load_model_sync():
             # back to the effective configured checkpoint below.
             logger.debug("Could not attach resident model identity", exc_info=True)
 
+        if local_fingerprint is not None:
+            from services.local_model_paths import note_loaded
+            note_loaded("tts", "omnivoice", checkpoint, local_fingerprint)
         _set_loading("ready", "Model ready", progress=100)
         logger.info("VoiceStudio model loaded successfully.")
         return _model
@@ -3868,6 +3904,13 @@ def release_device_cache(*, device: str | None = None, raise_on_failure: bool = 
     ``free_vram()``'s original contract for unload callers that report a failed
     flush to the user.
     """
+    if device is None:
+        from core.device_caps import gpu_probe_skipped
+
+        # CPU was chosen: no accelerator holds a cache, and probing for one
+        # would initialise the driver that choice avoids (#4006).
+        if gpu_probe_skipped():
+            return
     torch = _lazy_torch()
     try:
         name = str(device).split(":", 1)[0] if device is not None else _active_accelerator_name(torch)

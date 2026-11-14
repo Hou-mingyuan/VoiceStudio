@@ -141,6 +141,15 @@ try:
 except ImportError:
     pass
 
+# transformers' 4-thread weight loader faults with 0xC0000005 in
+# torch/storage.py on some Windows hosts (#3767, #3772, #4024). Serial loading
+# is a host stability default on Windows only (load speed, not a feature
+# difference). Applied after .env and saved settings load so a user value such
+# as "0" wins; the desktop shell deliberately does not preset it. Must precede
+# any transformers import.
+if sys.platform == "win32":
+    os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
+
 # A mirror in HF_ENDPOINT must never receive the Hugging Face token, here or in
 # engine processes that inherit this environment.
 from services.hf_auth import apply_process_token_policy as _apply_hf_token_policy  # noqa: E402
@@ -869,12 +878,15 @@ def _phase_a_finalize() -> None:
                 "MCP server not mounted (%s); /mcp disabled.", _mcp_err
             )
 
-    app.mount("/audio", StaticFiles(directory=OUTPUTS_DIR), name="audio")
-    app.mount("/voice_audio", StaticFiles(directory=VOICES_DIR), name="voice_audio")
+    # User and engine files: never served as a page (core/safe_static.py).
+    from core.safe_static import SafeMediaFiles
+
+    app.mount("/audio", SafeMediaFiles(directory=OUTPUTS_DIR), name="audio")
+    app.mount("/voice_audio", SafeMediaFiles(directory=VOICES_DIR), name="voice_audio")
     # Bundled demo assets — read-only, ships with the app, no network.
     _demo_dir = os.path.join(os.path.dirname(__file__), "assets", "samples")
     if os.path.isdir(_demo_dir):
-        app.mount("/demo_audio", StaticFiles(directory=_demo_dir), name="demo_audio")
+        app.mount("/demo_audio", SafeMediaFiles(directory=_demo_dir), name="demo_audio")
 
     # SPA shell LAST so the "/" StaticFiles mount can't shadow any router.
     from core.spa_inject import (
@@ -1858,9 +1870,25 @@ class NetworkAccessMiddleware:
             or request.cookies.get("ov_pin")
             or ""
         )
+        from services.pin_guard import pin_guard
+
+        # A locked-out client is refused before its PIN is compared, so guessing
+        # while locked out learns nothing. A request with no PIN is not a guess.
+        if supplied:
+            wait = pin_guard.retry_after(client, pin)
+            if wait > 0:
+                resp = JSONResponse(
+                    {"detail": "Too many wrong PINs. Try again later."},
+                    status_code=429,
+                    headers={"Retry-After": str(wait)},
+                )
+                return await resp(scope, receive, send)
         if not credential_matches(supplied, pin):
+            if supplied:
+                pin_guard.failed(client, pin)
             resp = JSONResponse({"detail": "PIN required"}, status_code=401)
             return await resp(scope, receive, send)
+        pin_guard.passed(client, pin)
         # Valid PIN. Set the cookie by wrapping send to inject Set-Cookie on the
         # http.response.start message — without ever materialising the body.
         if request.cookies.get("ov_pin") != pin:
@@ -2085,7 +2113,12 @@ _HEALTH_DEVICE_TTL_S = 60.0
 
 def _torch_device_label() -> str:
     """This process's PyTorch device. ROCm presents through ``torch.cuda``, so
-    ``torch.version.hip`` tells it apart from CUDA."""
+    ``torch.version.hip`` tells it apart from CUDA. A host pinned to CPU is
+    reported without touching a GPU runtime (#4002)."""
+    from core.device_caps import gpu_probe_skipped
+
+    if gpu_probe_skipped():
+        return "cpu"
     import torch
 
     if torch.cuda.is_available():

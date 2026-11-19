@@ -72,9 +72,17 @@ jobs:
           version: '0.12.13'
           enable-cache: false
       - name: Install native build dependencies
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libxdo-dev libxtst-dev libx11-dev libxkbcommon-dev libwayland-dev libssl-dev pkg-config squashfs-tools
+          helper=.github/scripts/apt-retry.sh
+          # An older release tag predates the helper; take it from this workflow's commit.
+          if [ ! -f "$helper" ]; then
+            helper="$RUNNER_TEMP/apt-retry.sh"
+            gh api -H "Accept: application/vnd.github.raw" \
+              "repos/$GITHUB_REPOSITORY/contents/.github/scripts/apt-retry.sh?ref=$GITHUB_SHA" > "$helper"
+          fi
+          bash "$helper" install libasound2-dev libxdo-dev libxtst-dev libx11-dev libxkbcommon-dev libwayland-dev libssl-dev pkg-config squashfs-tools
       - name: Bundle pinned uv
         run: |
           node --input-type=module <<'NODE'
@@ -100,6 +108,10 @@ jobs:
           node electron/tests/packaging-contract.mjs
       - name: Package without publishing
         working-directory: electron
+        env:
+          SUPERMETRY_APP_ID: ${{ secrets.SUPERMETRY_APP_ID }}
+          SUPERMETRY_INGEST_KEY: ${{ secrets.SUPERMETRY_INGEST_KEY }}
+          SUPERMETRY_APP_HOST: ${{ vars.SUPERMETRY_APP_HOST || secrets.SUPERMETRY_APP_HOST }}
         run: |
           bun x electron-builder --config electron-builder.config.mjs --linux snap --x64 --publish never
           node tests/packaging-contract.mjs --artifact
@@ -125,7 +137,7 @@ jobs:
           }
           NODE
       - name: Save Snap and provenance for review
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: snap-store-rehearsal-linux-x64
           retention-days: 14

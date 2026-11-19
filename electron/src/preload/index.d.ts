@@ -1,6 +1,13 @@
 import type { CrashContext } from '../shared/utils/crashContext';
 import type { HostSnapshotLike } from '../shared/utils/hostSnapshot';
 import type { InstallFailure } from '../shared/utils/installFailure';
+import type { DiagnosticInput, DiagnosticState } from './diagnostics';
+export type {
+  DiagnosticInput,
+  DiagnosticState,
+  DiagnosticCategory,
+  DiagnosticStage,
+} from './diagnostics';
 /**
  * The contextBridge surface exposed to the renderer as `window.voicestudio`.
  *
@@ -49,6 +56,8 @@ export interface BackendStatus {
   analyticsDisabled?: boolean;
   /** Code and facts for the current install or startup failure. */
   failure?: InstallFailure;
+  /** The local engine crashed and can be started again on CPU (`backend.restartOnCpu`). */
+  cpuRestartAvailable?: boolean;
   stage: BackendStage;
   setupIssue?:
     | 'space'
@@ -57,6 +66,7 @@ export interface BackendStatus {
     | 'wrong_architecture'
     | 'missing_system_library'
     | 'outdated_system_library'
+    | 'torch_dll_init_failed'
     | 'files_locked'
     | 'install_stuck';
   /** Free disk (GiB) the failed install needed; the CPU-only install needs less than the CUDA one. */
@@ -122,6 +132,8 @@ export interface BackendStatus {
   runtimeRegion?: RuntimeRegion;
   /** Where data, models and temp files go when the location was chosen during setup. */
   runtimeStorage?: { data: string; models: string; temp: string };
+  /** Opaque identity of a proven owned data root; absent means unknown. */
+  dataIdentity?: string;
 }
 
 export type RuntimeRegion = 'auto' | 'global' | 'china' | 'russia' | 'restricted';
@@ -422,6 +434,11 @@ export interface SetupConnectionCheck {
 }
 
 export interface VoiceStudioBridge {
+  diagnostics: {
+    getStatus(): Promise<DiagnosticState>;
+    setConsent(enabled: boolean): Promise<DiagnosticState>;
+    capture(event: DiagnosticInput, expectedEpoch: string): Promise<void>;
+  };
   /** VoiceStudio Cloud account; never carries a token. */
   account: {
     get(): Promise<AccountPublicState>;
@@ -496,6 +513,9 @@ export interface VoiceStudioBridge {
     /** Native fullscreen state (macOS hides the traffic lights there); the callback fires on every change. */
     isFullScreen(): Promise<boolean>;
     onFullScreen(callback: (fullscreen: boolean) => void): () => void;
+    /** Whether closing the window hides it to the system tray instead of quitting (off by default). */
+    getCloseToTray(): Promise<boolean>;
+    setCloseToTray(enabled: boolean): Promise<boolean>;
     onPersistenceFlush(callback: () => void | Promise<void>): () => void;
   };
   backend: {
@@ -505,6 +525,8 @@ export interface VoiceStudioBridge {
     onStatus(cb: (status: BackendStatus) => void): () => void;
     /** Kill (if managed) and relaunch the backend. */
     restart(): Promise<void>;
+    /** Store CPU as the compute device and restart a crashed local engine. */
+    restartOnCpu?(): Promise<void>;
     setupRuntime(): Promise<void>;
     cleanSetupRuntime(): Promise<void>;
     setupRuntimeOnCpu(): Promise<void>;

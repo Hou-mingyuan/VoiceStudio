@@ -6,18 +6,40 @@ import XCTest
 let uiReadyTimeout: TimeInterval = 45
 
 extension XCUIElement {
-    /// Waits for the element to exist, then taps it (XCTest scrolls it into view itself).
+    /// Waits for the element to exist and be hittable, then taps it. XCTest scrolls an element into view
+    /// only once it is in the accessibility hierarchy; a row of a lazy stack, grid or list
+    /// that has not been scrolled to is not, so reach those with `reveal` instead.
     @MainActor func tapReady(timeout: TimeInterval = uiReadyTimeout, file: StaticString = #filePath, line: UInt = #line) {
         guard waitReady(timeout: timeout, file: file, line: line) else { return }
+        // An element that exists can still be animating (a sheet or picker that just closed):
+        // a bare tap then fails with "Failed to not hittable". Wait for it to settle.
+        let hittable = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"), object: self)
+        if XCTWaiter().wait(for: [hittable], timeout: timeout) != .completed {
+            XCTFail("Element \(description) existed but was not hittable within \(Int(timeout))s", file: file, line: line)
+            return
+        }
         tap()
     }
+    /// Typing lands asynchronously: the last keystroke can reach the accessibility value a
+    /// moment after `typeText` returns (CI saw "…smoke tes" for "…smoke test"). Wait for the
+    /// value instead of reading it once; a keystroke that is really lost still fails.
+    @MainActor func waitForValue(_ expected: String, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line) {
+        let typed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", expected), object: self)
+        if XCTWaiter().wait(for: [typed], timeout: timeout) != .completed {
+            XCTAssertEqual(value as? String, expected, file: file, line: line)
+        }
+    }
     /// Waits for the element to exist; reports which element and which screen when it never does.
+    /// Lazy content that is not on screen never appears here: use `reveal` for it.
     @MainActor @discardableResult func waitReady(timeout: TimeInterval = uiReadyTimeout, file: StaticString = #filePath, line: UInt = #line) -> Bool {
         if waitForExistence(timeout: timeout) { return true }
         let app = XCUIApplication()
-        let screen = app.navigationBars.firstMatch.exists ? app.navigationBars.firstMatch.identifier : "(no navigation bar)"
-        let what = identifier.isEmpty ? label : identifier
-        XCTFail("Element '\(what)' did not appear within \(Int(timeout))s on screen '\(screen)'", file: file, line: line)
+        let bar = app.navigationBars.firstMatch
+        let screen = bar.exists ? bar.description : "(no navigation bar)"
+        // `description` names the query (e.g. `"home.gallery" Button`) without resolving it.
+        // `identifier` or `label` would resolve the missing element, and that failure
+        // ("Failed to get matching snapshot") would replace this message.
+        XCTFail("Element \(description) did not appear within \(Int(timeout))s on screen \(screen)", file: file, line: line)
         return false
     }
 }
@@ -29,7 +51,7 @@ extension XCUIApplication {
         let no = buttons["consent.no"]
         XCTAssertTrue(no.waitForExistence(timeout: timeout), "Consent sheet (consent.no) did not appear within \(Int(timeout))s", file: file, line: line)
         XCTAssertTrue(no.wait(for: \.isHittable, toEqual: true, timeout: timeout), file: file, line: line)
-        no.tap()
+        no.tapReady()
         XCTAssertTrue(no.waitForNonExistence(timeout: 10), file: file, line: line)
         XCTAssertTrue(navigationBars["Home"].waitForExistence(timeout: timeout), "Home did not render after consent within \(Int(timeout))s", file: file, line: line)
     }
@@ -41,11 +63,28 @@ extension XCUIApplication {
         // iOS 26+ collapses the bar after scrolling. Its selected tab expands it.
         let selected = tabBars.buttons.firstMatch
         if selected.exists, (selected.value as? String)?.contains("Collapsed") == true {
-            selected.tap()
+            selected.tapReady()
             if tab.waitForExistence(timeout: 3) { return tab }
         }
         let symbols = ["Home": "house", "Voices": "person.wave.2", "Dub": "film", "Dictate": "mic", "Settings": "gearshape"]
         return buttons.matching(NSPredicate(format: "label == %@ AND identifier == %@", label, symbols[label] ?? label)).firstMatch
+    }
+    /// A tab can exist before its native hit target is ready. Activate it once,
+    /// then confirm selection and arrival before recording or using the page.
+    @MainActor @discardableResult func selectTab(_ label: String, timeout: TimeInterval = uiReadyTimeout, file: StaticString = #filePath, line: UInt = #line) -> Bool {
+        let tab = tabButton(label)
+        guard tab.waitReady(timeout: timeout, file: file, line: line) else { return false }
+        guard tab.wait(for: \.isHittable, toEqual: true, timeout: timeout) else {
+            XCTFail("Tab \(label) did not become hittable", file: file, line: line); return false
+        }
+        tab.tapReady()
+        guard tab.wait(for: \.isSelected, toEqual: true, timeout: timeout) else {
+            XCTFail("Tab \(label) was not selected", file: file, line: line); return false
+        }
+        guard navigationBars[label].wait(for: \.isHittable, toEqual: true, timeout: timeout) else {
+            XCTFail("Destination \(label) did not appear", file: file, line: line); return false
+        }
+        return true
     }
     /// Scrolls until `element` sits wholly between the navigation bar and the tab bar.
     /// Content scrolled under those translucent bars can still report `isHittable`,
@@ -75,15 +114,15 @@ extension XCUIApplication {
         }
     }
     @MainActor func openSpeak() {
-        tabButton("Home").tap()
+        tabButton("Home").tapReady()
         if textViews["speak.text"].exists { return }
         for _ in 0..<5 {
             if buttons["home.speak"].exists { break }
-            if buttons["BackButton"].exists { buttons["BackButton"].tap() }
-            else { navigationBars.buttons.element(boundBy: 0).tap() }
+            if buttons["BackButton"].exists { buttons["BackButton"].tapReady() }
+            else { navigationBars.buttons.element(boundBy: 0).tapReady() }
         }
         for _ in 0..<8 { if buttons["home.speak"].isHittable { break }; swipeUp() }
-        buttons["home.speak"].tap()
+        buttons["home.speak"].tapReady()
     }
 
 }
@@ -95,7 +134,7 @@ final class SmokeTests: XCTestCase {
         app.launch(); connect(app)
         app.tabButton("Voices").tapReady(); app.buttons["voices.create"].tapReady()
         let phone = app.segmentedControls.buttons["This phone"]
-        XCTAssertTrue(phone.waitForExistence(timeout: uiReadyTimeout)); phone.tap()
+        XCTAssertTrue(phone.waitForExistence(timeout: uiReadyTimeout)); phone.tapReady()
         app.buttons["Cancel"].tapReady()
         app.buttons["voices.create"].tapReady()
         XCTAssertTrue(phone.waitForExistence(timeout: uiReadyTimeout))
@@ -121,7 +160,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(delete.frame.height, 44)
         let image = XCTAttachment(screenshot: app.screenshot())
         image.name = "Destructive-history-action"; image.lifetime = .keepAlways; add(image)
-        delete.tap()
+        delete.tapReady()
         XCTAssertTrue(saved.wait(for: \.exists, toEqual: false, timeout: 5))
     }
 
@@ -134,7 +173,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(app.textViews["speak.text"].waitForExistence(timeout: uiReadyTimeout))
         XCTAssertTrue(app.buttons["models.open"].exists)
         for tab in ["Voices", "Dub", "Dictate", "Settings"] {
-            app.tabButton(tab).tap()
+            app.tabButton(tab).tapReady()
             XCTAssertTrue(app.navigationBars[tab].waitForExistence(timeout: uiReadyTimeout))
             let title = app.descendants(matching: .any)["navigation.title"].firstMatch
             XCTAssertEqual(title.label, tab)
@@ -157,9 +196,9 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(no.label, "No thanks")
         XCTAssertEqual(yes.frame.width, no.frame.width, accuracy: 1)
         XCTAssertFalse(app.buttons["consent.dismiss"].exists)
-        XCTAssertTrue(app.staticTexts["This companion app records your choice on this phone. It sends no analytics."].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == %@", "Usage analytics are not sent from this phone; your choice is stored locally. Automatic diagnostic reports have a separate opt-in.")).firstMatch.exists)
         // First opt in, then prove passive dismissal replaces a prior Yes with No.
-        yes.tap()
+        yes.tapReady()
         XCTAssertTrue(app.tabBars.buttons["Settings"].waitForExistence(timeout: uiReadyTimeout))
         app.tabBars.buttons["Settings"].tapReady()
         XCTAssertEqual(app.switches["settings.analytics"].value as? String, "1")
@@ -198,10 +237,10 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(app.buttons["settings.palette.dark"].exists)
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", "Light palette")).count, 1)
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", "Dark palette")).count, 1)
-        light.tap()
+        light.tapReady()
         app.buttons["choice.option.default"].tapReady()
         XCTAssertEqual(light.value as? String, "Studio")
-        light.tap()
+        light.tapReady()
         app.buttons["choice.option.signal"].tapReady()
         XCTAssertEqual(light.value as? String, "VoiceStudio Original")
     }
@@ -212,7 +251,7 @@ final class SmokeTests: XCTestCase {
         app.launch()
         connect(app)
         XCTAssertTrue(app.textViews["speak.text"].waitForExistence(timeout: uiReadyTimeout))
-        XCTAssertTrue(app.descendants(matching: .any)["page.loading"].firstMatch.exists)
+        XCTAssertTrue(app.descendants(matching: .any)["page.loading"].firstMatch.waitForExistence(timeout: uiReadyTimeout))
         app.tabButton("Dub").tapReady()
         XCTAssertTrue(app.textFields["dub.source_url"].waitForExistence(timeout: uiReadyTimeout))
         app.tabButton("Voices").tapReady()
@@ -298,19 +337,19 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(app.alerts.count, 0)
         let engine = app.buttons["speak.engine"]
         XCTAssertTrue(engine.waitForExistence(timeout: uiReadyTimeout))
-        engine.tap()
+        engine.tapReady()
         let preset = app.buttons["choice.option.kittentts"]
         XCTAssertTrue(preset.waitForExistence(timeout: uiReadyTimeout))
         XCTAssertTrue(preset.label.contains("KittenTTS"))
         XCTAssertFalse(app.buttons["choice.option.unavailable"].isEnabled)
-        preset.tap()
+        preset.tapReady()
         let rowHeight = engine.frame.height
-        engine.tap()
+        engine.tapReady()
         let longName = "OuteTTS (MLX Audio, Apple Silicon)"
         let longOption = app.buttons["choice.option.mlx-audio"]
         XCTAssertTrue(longOption.waitForExistence(timeout: uiReadyTimeout))
         XCTAssertEqual(longOption.label, longName)
-        longOption.tap()
+        longOption.tapReady()
         XCTAssertEqual(engine.value as? String, longName)
         XCTAssertEqual(engine.frame.height, rowHeight, accuracy: 1)
         app.buttons["speak.language"].tapReady()
@@ -320,7 +359,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(app.buttons["choice.option.spanish"].exists)
         app.buttons["Close"].tapReady()
         editor.tapReady(); editor.typeText("VoiceStudio smoke test")
-        XCTAssertEqual(editor.value as? String, "VoiceStudio smoke test")
+        editor.waitForValue("VoiceStudio smoke test")
         dismissUsingDone(app)
         app.swipeUp()
         app.buttons["speak.generate"].tapReady()
@@ -333,7 +372,7 @@ final class SmokeTests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertLessThan(play.frame.maxY, app.buttons["speak.generate"].frame.minY)
-        play.tap()
+        play.tapReady()
         XCTAssertTrue(play.wait(for: \.label, toEqual: "Pause", timeout: 3))
         let playback = XCTAttachment(screenshot: app.screenshot())
         playback.name = "Generated-audio-playback"; playback.lifetime = .keepAlways; add(playback)
@@ -353,7 +392,7 @@ final class SmokeTests: XCTestCase {
         address.tapReady(); address.typeText("http://127.0.0.1:3900")
         // A field tap must retain focus; a tap on surrounding chrome dismisses it.
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: uiReadyTimeout))
-        app.navigationBars.firstMatch.tap()
+        app.navigationBars.firstMatch.tapReady()
         assertKeyboardDismissed(app)
         address.tapReady(); address.typeText("\n")
         assertKeyboardDismissed(app)
@@ -372,7 +411,7 @@ final class SmokeTests: XCTestCase {
         app.buttons["Rename"].tapReady()
         let rename = app.textFields["voices.rename.name"]
         XCTAssertTrue(rename.waitForExistence(timeout: uiReadyTimeout))
-        rename.tap(); rename.typeText(" updated\n")
+        rename.tapReady(); rename.typeText(" updated\n")
         assertKeyboardDismissed(app)
         app.buttons["Cancel"].tapReady()
         app.buttons["voices.create"].tapReady()
@@ -385,7 +424,7 @@ final class SmokeTests: XCTestCase {
         app.tabButton("Dub").tapReady()
         let source = app.textFields["dub.source_url"]
         XCTAssertTrue(source.waitForExistence(timeout: uiReadyTimeout))
-        source.tap(); source.typeText("https://media.example/sample\n")
+        source.tapReady(); source.typeText("https://media.example/sample\n")
         assertKeyboardDismissed(app)
 
         app.tabButton("Settings").tapReady()
@@ -394,7 +433,7 @@ final class SmokeTests: XCTestCase {
             if language.isHittable { break }
             app.swipeUp()
         }
-        language.tap()
+        language.tapReady()
         let search = app.textFields["search.field"]
         XCTAssertTrue(search.waitForExistence(timeout: uiReadyTimeout))
         search.tapReady(); search.typeText("English")
@@ -407,7 +446,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.wait(for: \.isHittable, toEqual: true, timeout: keyboardWait))
         let done = app.buttons["keyboard.done"]
         XCTAssertTrue(done.wait(for: \.isHittable, toEqual: true, timeout: keyboardWait))
-        done.tap()
+        done.tapReady()
         assertKeyboardDismissed(app)
     }
 

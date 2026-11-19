@@ -26,18 +26,41 @@
       # and stops git metadata from churning the hash.
       src = lib.cleanSourceWith {
         src = lib.cleanSource self;
-        # cleanSource already drops .git and result; node_modules and .venv are
-        # gitignored but `nix build path:.` would otherwise copy them.
+        # cleanSource already drops .git and Nix result symlinks, not regular
+        # result-* source modules. node_modules and .venv are gitignored but
+        # `nix build path:.` would otherwise copy them.
         filter =
           path: type:
           let
             name = baseNameOf (toString path);
           in
           name != "node_modules"
-          && name != ".venv"
-          && name != "result"
-          && !(lib.hasPrefix "result-" name);
+          && name != ".venv";
       };
+
+      # Compare real regular modules in the unfiltered tree with the exact
+      # source consumed by the app build. Skip dependencies before recursion
+      # and never follow symlinks, including Nix result links.
+      sourceModules =
+        let
+          collect = relative:
+            lib.concatLists (lib.mapAttrsToList (name: type:
+              let
+                child = if relative == "" then name else "${relative}/${name}";
+              in
+              if lib.elem name [ ".git" ".svn" "CVS" ".hg" ".jj" ".pijul" "_darcs" "node_modules" ".venv" ] then [ ]
+              else if type == "directory" then collect child
+              else lib.optional (
+                type == "regular"
+                && lib.any (extension: lib.hasSuffix extension name)
+                  [ ".js" ".jsx" ".mjs" ".cjs" ".ts" ".tsx" ".mts" ".cts" ]
+              ) child
+            ) (builtins.readDir "${self}/${relative}"));
+        in
+        collect "";
+      missingSourceModules = lib.filter (
+        relative: !(builtins.pathExists "${src}/${relative}")
+      ) sourceModules;
 
       # Only what `bun install` reads: the root manifest and lockfile, each
       # workspace's package.json, the patches named in patchedDependencies and
@@ -342,7 +365,7 @@
               pkgs.nodejs_22
             ];
             outputHashMode = "recursive";
-            outputHash = "sha256-jH4D5OAS4yeJsFIUywQzm3NpXyH2Y1kJ1+5WyZvvXIE=";
+            outputHash = "sha256-bqxnoXhbM2HK+xW+pBOy71WjSuAhsbjbr429b+uT6WU=";
             sourceProvenance = null;
           } ''
           export HOME=$TMPDIR
@@ -472,8 +495,8 @@
       # The rev must equal quant_map.json's runtime_commit_sha (asserted
       # below); the ggml rev is that commit's submodule gitlink. When the pin
       # moves, update both revs and both hashes.
-      omnivoiceRuntimeRev = "886fc079838ca7400cb2b42b36e2a65aa1daabe8";
-      omnivoiceGgmlRev = "f3bc6505c4e2ede83a193e0fb4695938ff3804fd";
+      omnivoiceRuntimeRev = "040c8b344d8c670ce1475194751d119b5ef82c78";
+      omnivoiceGgmlRev = "d5152bf4348453068aa8de0d479caef40a613b9d";
       pinnedRuntimeRev =
         (lib.importJSON ./backend/engines/omnivoice_gguf/quant_map.json)._meta.runtime_commit_sha;
 
@@ -489,7 +512,7 @@
             owner = "ServeurpersoCom";
             repo = "ggml";
             rev = omnivoiceGgmlRev;
-            hash = "sha256-C3pmL0NFFHTlnfeRWzS5EVz1bDW3cPO5Q6CSLXnLP3M=";
+            hash = "sha256-qRyucqwOppbd0ZjjrX48Bbdh9yyljYHuUwk3sQFXLnU=";
           };
         in
         pkgs.stdenv.mkDerivation {
@@ -500,7 +523,7 @@
             owner = "ServeurpersoCom";
             repo = "omnivoice.cpp";
             rev = omnivoiceRuntimeRev;
-            hash = "sha256-apD4EVVNiuCC11iTP4dtFaMOLlEi86102WSDBx6ac/g=";
+            hash = "sha256-9XE5WZo55hB4HCXaYV1FknOy0A0yVKqurgfVfaE1GhI=";
           };
 
           # GitHub archives leave the ggml submodule as an empty directory.
@@ -537,6 +560,7 @@
             runHook preInstall
             mkdir -p "$out"
             cp -v build/omnivoice-tts "$out/omnivoice-tts-linux-x86_64"
+            cp -v build/tts-server "$out/tts-server-linux-x86_64"
             find build -name 'libggml*.so*' -type f -exec cp -v {} "$out/" \;
             find build -name 'libggml*.so*' -type l -exec cp -vL {} "$out/" \;
             for file in "$out"/*; do
@@ -859,6 +883,7 @@
             install -Dm644 electron/T3CODE-LICENSE.txt "$resources/electron/T3CODE-LICENSE.txt"
             install -Dm644 config/app.json "$resources/config/app.json"
             install -Dm644 config/analytics.json "$resources/config/analytics.json"
+            install -Dm644 config/diagnostics.json "$resources/config/diagnostics.json"
             # stageRuntimeSources (runtime-project.ts SOURCES) copies these on
             # every platform and fails setup when one is missing.
             install -Dm644 scripts/windows-rocm-recipe.json "$resources/scripts/windows-rocm-recipe.json"
@@ -1057,6 +1082,15 @@
           nodeDepsDev = nodeDeps { inherit pkgs; };
         in
         {
+          # The assertion runs during `flake check --no-build`, before any
+          # expensive app build, using the actual cleanSourceWith output.
+          sourceModules =
+            assert lib.assertMsg (missingSourceModules == [ ])
+              "flake.nix: source filter removed JS/TS modules: ${lib.concatStringsSep ", " missingSourceModules}";
+            pkgs.runCommand "voicestudio-check-source-modules" { } ''
+              touch $out
+            '';
+
           # Every NEEDED entry must resolve inside the Nix store. A missing
           # libxdo surfaces here as "not found" rather than as a runtime
           # failure in the packaged app.
@@ -1108,6 +1142,7 @@
               electron/T3CODE-LICENSE.txt \
               config/app.json \
               config/analytics.json \
+              config/diagnostics.json \
               scripts/windows-rocm-recipe.json \
               scripts/smoke_windows_rocm.py \
               brand/icon.png \
@@ -1118,6 +1153,7 @@
               brand/trayTemplate.png \
               brand/trayRecordingTemplate.png \
               bin/omnivoice-tts-linux-x86_64 \
+              bin/tts-server-linux-x86_64 \
               bin/checksums.sha256 \
               tools/uv \
               native/voicestudio-desktop-bridge \

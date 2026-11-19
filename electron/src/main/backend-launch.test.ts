@@ -286,6 +286,50 @@ it('sends an Intel Mac checkout to a remote backend instead of setup:api (#3584)
   expect(await resolveSpawnPlan(3900, undefined, 'unsupported_platform')).toHaveProperty('argv');
 });
 
+it('restarts a crashed engine on CPU through the stored Settings choice', async () => {
+  const { BackendSupervisor, backendDataDir } = await import('./backend');
+  const { mkdtempSync, readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs');
+  const data = mkdtempSync(join(tmpdir(), 'voice-cpu-'));
+  const supervisor = new BackendSupervisor();
+  const internals = supervisor as unknown as {
+    stage: string;
+    managed: boolean;
+    launchLog: { env: NodeJS.ProcessEnv; cwd: string; startedAt: number } | null;
+  };
+  const restart = vi.spyOn(supervisor, 'restart').mockResolvedValue(undefined);
+  internals.stage = 'crashed';
+  internals.managed = true;
+  internals.launchLog = { env: { OMNIVOICE_DATA_DIR: data }, cwd: data, startedAt: 1 };
+  expect(backendDataDir(internals.launchLog)).toBe(resolve(data));
+  expect(supervisor.status.cpuRestartAvailable).toBe(true);
+
+  await supervisor.restartOnCpu();
+  expect(JSON.parse(readFileSync(join(data, 'prefs.json'), 'utf8'))).toEqual({
+    compute_device: 'cpu',
+  });
+  expect(restart).toHaveBeenCalledTimes(1);
+
+  // OMNIVOICE_DEVICE overrides Settings, so writing them could not help.
+  internals.launchLog = {
+    env: { OMNIVOICE_DATA_DIR: data, OMNIVOICE_DEVICE: 'cuda' },
+    cwd: data,
+    startedAt: 1,
+  };
+  expect(supervisor.status.cpuRestartAvailable).toBeUndefined();
+  await expect(supervisor.restartOnCpu()).rejects.toThrow();
+  // A custom backend command may not read VoiceStudio's settings.
+  internals.launchLog = { env: { OMNIVOICE_DATA_DIR: data }, cwd: data, startedAt: 1 };
+  vi.stubEnv('OMNIVOICE_BACKEND_CMD', '["custom-python", "server.py"]');
+  expect(supervisor.status.cpuRestartAvailable).toBeUndefined();
+  await expect(supervisor.restartOnCpu()).rejects.toThrow();
+  vi.unstubAllEnvs();
+  expect(supervisor.status.cpuRestartAvailable).toBe(true);
+  // Only after a crash of our own engine.
+  internals.stage = 'failed';
+  expect(supervisor.status.cpuRestartAvailable).toBeUndefined();
+  expect(restart).toHaveBeenCalledTimes(1);
+});
+
 it('keeps native fault frames when the production log ring overflows', async () => {
   const { BackendSupervisor } = await import('./backend');
   const supervisor = new BackendSupervisor();
@@ -363,18 +407,16 @@ it('reads Smart App Control from the registry output', () => {
 it('names Smart App Control when it blocked the runtime (#3224)', () => {
   const python = String.raw`C:\Users\u\VoiceStudio\.venv\Scripts\python.exe`;
   const blocked = Object.assign(new Error('spawn UNKNOWN'), { code: 'UNKNOWN' });
-  for (const smartAppControl of ['on', 'evaluation'] as const) {
+  const enforcedMessage = spawnFailureMessage(python, blocked, { smartAppControl: 'on' });
+  expect(enforcedMessage).toContain(python);
+  expect(enforcedMessage).toContain('spawn UNKNOWN');
+  expect(enforcedMessage).toContain('Windows Smart App Control blocked it');
+  expect(enforcedMessage).not.toContain('repair the local runtime');
+  // Without enforcement, keep the OS refusal without recommending reinstallation.
+  for (const smartAppControl of ['evaluation', 'off', 'unknown'] as const) {
     const message = spawnFailureMessage(python, blocked, { smartAppControl });
-    expect(message).toContain(python);
-    expect(message).toContain('spawn UNKNOWN');
-    expect(message).toContain('Windows Smart App Control blocked it');
+    expect(message).not.toContain('Smart App Control');
     expect(message).not.toContain('repair the local runtime');
-  }
-  // Off or unreadable: keep the OS refusal without recommending reinstallation.
-  for (const smartAppControl of ['off', 'unknown'] as const) {
-    expect(spawnFailureMessage(python, blocked, { smartAppControl })).not.toContain(
-      'repair the local runtime',
-    );
   }
   // Only the bare Windows UNKNOWN is attributed to it, never a missing file.
   const missing = Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' });
@@ -513,6 +555,9 @@ it('names Smart App Control when it refused a runtime DLL, and other blockers ot
       `Windows Smart App Control blocked it. Last output: ${last}`,
   );
   expect(loadBlockMessage('exit code 1', last, 'application_control', 'off')).toContain(
+    'A Windows application control policy blocked it.',
+  );
+  expect(loadBlockMessage('exit code 1', last, 'application_control', 'evaluation')).toContain(
     'A Windows application control policy blocked it.',
   );
   expect(loadBlockMessage('exit code 1', '', 'group_policy', 'on')).toContain(

@@ -1,9 +1,14 @@
+import { localDataIdentity } from './local-data-identity';
 import { decideMissingRuntime, runtimeWasInstalled } from './runtime-repair';
 import { windowsRocmInstalled, windowsRocmRequested } from './runtime-windows-rocm';
 import { runtimeProjectReady } from './runtime-readiness';
 import { cpuSetupOffered, rememberTorchVariant, saveTorchVariant } from './torch-choice';
 import { runRuntimeProbe } from './runtime-probe';
-import { needsManagedRuntime, selectedPythonPath, validatePythonRuntime } from './runtime-python-selection';
+import {
+  needsManagedRuntime,
+  selectedPythonPath,
+  validatePythonRuntime,
+} from './runtime-python-selection';
 import { RuntimeLaunchRefusedError } from './runtime-launch-refusal';
 import { pypiFilesHost } from './pypi-mirror';
 import { SetupLog, scrubSetupText } from './setup-log';
@@ -13,12 +18,14 @@ import {
   installRuntime,
   MISSING_SYSTEM_LIBRARY_CODE,
   OUTDATED_SYSTEM_LIBRARY_CODE,
+  TORCH_DLL_INIT_FAILED_CODE,
   RUNTIME_FILES_LOCKED_CODE,
   promoteLegacyRuntimeCaches,
   runtimeDependenciesReady,
   runtimeDownloadHosts,
   cpuTorchApplies,
   resolveTorchVariant,
+  primeTorchVariantProbe,
   managedPythonRequest,
   runtimeInstallInterrupted,
   runtimePython,
@@ -29,7 +36,15 @@ import {
 } from './runtime-project';
 import { detectSetupHardware, type SetupHardware } from './setup-hardware';
 import { collectHostSnapshot, freeGb, type HostSnapshot } from './host-snapshot';
-import { collectTrustFacts, programBasename, runProbe, type TrustFacts } from './install-doctor';
+import {
+  collectFaultFacts,
+  collectTrustFacts,
+  programBasename,
+  runProbe,
+  type FaultFacts,
+  type TrustFacts,
+} from './install-doctor';
+import { isNativeFaultExit } from '../shared/utils/nativeExit';
 import {
   classifyInstallFailure,
   launchRefused,
@@ -40,7 +55,8 @@ import { runtimeSetupSupported } from './distribution';
 import { bundledPython, bundledRuntimeEnv } from './bundled-runtime';
 import { asciiSafePthFiles } from './pth-ascii';
 import { devProbeStamped, writeDevProbeStamp } from './dev-probe-stamp';
-import { CrashJournal } from './crash-journal';
+import { applyWeightLoadFallback, CrashJournal } from './crash-journal';
+import { pinComputeDeviceToCpu } from './compute-device-pref';
 import { nativeFaultSummary } from '../shared/utils/crashReport';
 import {
   backendLogEvidence,
@@ -68,7 +84,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { access, open, rm, stat } from 'node:fs/promises';
+import { access, lstat, open, rm, stat } from 'node:fs/promises';
 import setupLock from '../../../uv.lock?raw';
 import { cpus, homedir, release, totalmem } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -90,20 +106,20 @@ import {
   type RemoteSession,
 } from './remote-backend';
 import { toolSearchDirs, toolSearchDirsAsync } from './tool-path';
+import { SetupProgressTracker, cleanProcessLine, downloadStallExceeded } from './setup-progress';
 import {
-  SetupProgressTracker,
-  cleanProcessLine,
-  downloadStallExceeded,
-} from './setup-progress';
-import { SetupDownloadReporter, inFlightDownloadBytes } from './setup-downloads';
+  SetupDownloadReporter,
+  runtimeFailureDownloadSource,
+  inFlightDownloadBytes,
+} from './setup-downloads';
 import { scrubText } from '../shared/utils/scrub';
+import { SUPERVISE_ACTIVE_MS as SUPERVISE_POLL_MS, superviseDelayMs } from './supervise-cadence';
 import { DEFAULT_BACKEND_PORT } from '../../../config/app-config.mjs';
 
 const DEFAULT_BUDGET_S = 300;
 const READY_POLL_MS = 500;
 /** Allow another VoiceStudio shell to take ownership without showing a false crash. */
 const REPLACEMENT_ATTACH_GRACE_MS = 10_000;
-const SUPERVISE_POLL_MS = 2000;
 const PROBE_TIMEOUT_MS = 1500;
 const SHUTDOWN_INTENT_TIMEOUT_MS = 1000;
 /** Consecutive supervisor probe misses (2 s apart) before a ready backend is declared gone. */
@@ -531,6 +547,11 @@ export function bundledWebUiPath(): string {
   return join(backendRoot(), 'frontend', 'dist');
 }
 
+/** The OmniVoice GGUF runtime packaged with this app version (omnivoice-tts-bundle.mjs). */
+export function bundledGgufBinPath(): string {
+  return join(backendRoot(), 'bin');
+}
+
 function samePath(left: string, right: string): boolean {
   const normalizedLeft = resolve(left);
   const normalizedRight = resolve(right);
@@ -583,7 +604,10 @@ export async function resolveSpawnPlan(
       };
     }
     // -B: never write bytecode into the app's bundled sources.
-    return { argv: [selectedPython, '-B', '-m', ...UVICORN_ARGS, '--port', String(port)], cwd: project };
+    return {
+      argv: [selectedPython, '-B', '-m', ...UVICORN_ARGS, '--port', String(port)],
+      cwd: project,
+    };
   }
   if (app.isPackaged) {
     const project = packagedProject ?? join(defaultRuntimeRoot(), 'project');
@@ -732,6 +756,12 @@ function childEnv(
   if (app.isPackaged && process.resourcesPath && !env.OMNIVOICE_FRONTEND_DIST?.trim()) {
     env.OMNIVOICE_FRONTEND_DIST = bundledWebUiPath();
   }
+  // #4051: the managed runtime runs a copy of backend/ staged in the runtime
+  // folder, which has no bin/, so the GGUF engine's `<root>/bin` lookup found
+  // no runtime there. Point it at the one shipped in this version's resources.
+  if (app.isPackaged && process.resourcesPath && !env.OMNIVOICE_GGUF_BIN_DIR?.trim()) {
+    env.OMNIVOICE_GGUF_BIN_DIR = bundledGgufBinPath();
+  }
   // Region defaults must leave HF_ENDPOINT unset so the backend can probe and
   // fail over. Only an explicit user endpoint may disable automatic selection.
   if (platform === 'win32') {
@@ -740,6 +770,10 @@ function childEnv(
     env.HF_HUB_DISABLE_SYMLINKS_WARNING = '1';
     // MKL's Fortran runtime aborts the child on console CLOSE/LOGOFF events (#1153).
     env.FOR_DISABLE_CONSOLE_CTRL_HANDLER ??= '1';
+    // HF_DEACTIVATE_ASYNC_LOAD (serial weight loading, #3767/#3772/#4024) is
+    // defaulted by the backend after it reads the project .env, so a `.env`
+    // value of "0" wins. Do not preset it here: Windows env keys are
+    // case-insensitive and a preset would also beat the .env.
   }
   return env;
 }
@@ -836,11 +870,16 @@ export function spawnFailureMessage(
 ): string {
   const detail = errorMessage(error);
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === 'ETIMEDOUT') {
+    // The OS gave up starting the program (on macOS, posix_spawn times out when its
+    // security check of the executable stalls); Node throws a bare `spawn ETIMEDOUT` (#4035).
+    return `Could not start ${command}: ${detail}. The system did not start it in time, which usually clears after restarting the computer. Restart it, then open VoiceStudio again.`;
+  }
   const launchRejected = ['ENOENT', 'UNKNOWN', 'EACCES', 'EPERM'].includes(code ?? '');
   if (!launchRejected) return `Could not start ${command}: ${detail}`;
   if (runtimeOwned && code === 'UNKNOWN') {
     const control = smartAppControl ?? readSmartAppControl();
-    if (control === 'on' || control === 'evaluation') {
+    if (control === 'on') {
       return `Could not start ${command}: ${detail}. Windows Smart App Control blocked it.`;
     }
   }
@@ -851,6 +890,9 @@ export function spawnFailureMessage(
     ? `Could not start ${command}: ${detail}. Install or repair the local runtime, then restart VoiceStudio.`
     : `Could not start ${command}: ${detail}. Check that the program exists and can be launched, then try again.`;
 }
+
+/** Waits before each retry of a launch the OS timed out (#4035). */
+export const SPAWN_RETRY_DELAYS_MS = [2_000, 5_000];
 
 function runtimeFailureMessage(error: unknown): string {
   return error instanceof RuntimeLaunchRefusedError
@@ -872,8 +914,7 @@ export function loadBlockMessage(
   const who =
     block === 'antivirus'
       ? 'Your antivirus blocked it.'
-      : block === 'application_control' &&
-          (smartAppControl === 'on' || smartAppControl === 'evaluation')
+      : block === 'application_control' && smartAppControl === 'on'
         ? 'Windows Smart App Control blocked it.'
         : 'A Windows application control policy blocked it.';
   return (
@@ -929,16 +970,139 @@ export interface BackendLogTail {
  * survives a silent readiness timeout.
  */
 function backendLogPath(launch: Pick<BackendLaunchLog, 'env' | 'cwd'>): string {
+  return join(backendDataDir(launch), 'omnivoice.log');
+}
+
+/** The backend's DATA_DIR for one launch (backend/core/config.py `get_app_data_dir`). */
+export function backendDataDir(
+  launch: Pick<BackendLaunchLog, 'env' | 'cwd'>,
+  platform = process.platform,
+): string {
   const { env } = launch;
   const custom = env.OMNIVOICE_DATA_DIR?.trim();
   const dataDir = custom
     ? custom
-    : process.platform === 'darwin'
+    : platform === 'darwin'
       ? join(homedir(), 'Library', 'Application Support', 'OmniVoice')
-      : process.platform === 'win32'
+      : platform === 'win32'
         ? join(env.APPDATA ?? '', 'OmniVoice')
         : join(homedir(), '.omnivoice');
-  return join(resolve(launch.cwd || '.', dataDir), 'omnivoice.log');
+  return resolve(launch.cwd || '.', dataDir);
+}
+
+/** Prove absence of root-changing keys without interpreting dotenv values.
+ * Python dotenv never interpolates key names. Scan the entire bounded UTF-8
+ * source, including comments/quoted text, so unsupported syntax stays unknown
+ * when it mentions either key (or platform selectors for a default root);
+ * unrelated settings cannot redirect this root.
+ */
+const DEFAULT_DATA_SELECTOR_KEY =
+  /(?:^|[\r\n])[^\S\r\n]*(?:export[^\S\r\n]+)?(?:'(?:HOME|APPDATA|USERPROFILE|HOMEDRIVE|HOMEPATH)'|(?:HOME|APPDATA|USERPROFILE|HOMEDRIVE|HOMEPATH))[^\S\r\n]*(?:=|[\r\n#]|$)/i;
+async function startupEnvPreservesDataRoot(
+  path: string,
+  derivesDefault: boolean,
+): Promise<boolean> {
+  const limit = 64 * 1024;
+  let file: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    file = await open(
+      path,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+    );
+    const info = await file.stat();
+    const entry = await lstat(path);
+    if (
+      !info.isFile() ||
+      !entry.isFile() ||
+      info.dev !== entry.dev ||
+      info.ino !== entry.ino ||
+      info.size > limit
+    )
+      return false;
+    const buffer = Buffer.alloc(limit + 1);
+    let size = 0;
+    while (size < buffer.length) {
+      const { bytesRead } = await file.read(buffer, size, buffer.length - size, size);
+      if (!bytesRead) break;
+      size += bytesRead;
+    }
+    if (size > limit) return false;
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, size));
+    return (
+      !text.includes('\0') &&
+      !/OMNIVOICE_(?:DATA_DIR|ENV_FILE)/i.test(text) &&
+      (!derivesDefault || !DEFAULT_DATA_SELECTOR_KEY.test(text))
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      try {
+        await lstat(path);
+      } catch (missing) {
+        return (missing as NodeJS.ErrnoException).code === 'ENOENT';
+      }
+    }
+    return false;
+  } finally {
+    await file?.close();
+  }
+}
+
+/** Python loads saved settings after dotenv, overriding launcher data defaults. */
+async function launchDataRootEstablished(launch: BackendLaunchLog): Promise<string | undefined> {
+  // Windows environment names are case-insensitive, so Python honours
+  // `omnivoice_env_file` or `appdata` where the exact-case lookups below would
+  // miss them and prove the wrong root. Leave the identity unknown instead.
+  if (
+    process.platform === 'win32' &&
+    Object.keys(launch.env).some(
+      (key) =>
+        /^(?:OMNIVOICE_DATA_DIR|OMNIVOICE_ENV_FILE|USERPROFILE|HOMEDRIVE|HOMEPATH|APPDATA)$/i.test(
+          key,
+        ) && key !== key.toUpperCase(),
+    )
+  )
+    return;
+  const raw = launch.env.OMNIVOICE_DATA_DIR;
+  // Python uses this string verbatim; backendDataDir's log-only trim must not
+  // manufacture authority for a different directory.
+  if (raw && raw !== raw.trim()) return;
+  const home =
+    process.platform === 'win32'
+      ? launch.env.USERPROFILE ||
+        (launch.env.HOMEDRIVE && launch.env.HOMEPATH
+          ? launch.env.HOMEDRIVE + launch.env.HOMEPATH
+          : undefined)
+      : launch.env.HOME;
+  // A missing launch home may be filled by project dotenv before Python picks
+  // its default saved-env path; the parent's home is not authority for it.
+  if (!launch.env.OMNIVOICE_ENV_FILE && !home) return;
+  const derivesDefault = !raw;
+  const selector = process.platform === 'win32' ? launch.env.APPDATA : home;
+  // config.py's platform defaults use only these exact child values. Neither
+  // Node's parent home nor a relative/missing selector proves Python's root.
+  if (derivesDefault && (!selector || selector !== selector.trim() || !isAbsolute(selector)))
+    return;
+  const dataDirectory =
+    raw ||
+    (process.platform === 'darwin'
+      ? join(selector!, 'Library', 'Application Support', 'OmniVoice')
+      : process.platform === 'win32'
+        ? join(selector!, 'OmniVoice')
+        : join(selector!, '.omnivoice'));
+  const savedEnv = launch.env.OMNIVOICE_ENV_FILE || join(home!, '.config', 'omnivoice', 'env');
+  const paths = new Set([resolve(launch.cwd, savedEnv), join(launch.cwd, 'backend', '.env')]);
+  let directory = resolve(launch.cwd);
+  // find_dotenv walks from backend/main.py to the filesystem root. A present
+  // file can redirect the saved-env location; never expose its values.
+  for (let depth = 0; depth < 64; depth++) {
+    paths.add(join(directory, '.env'));
+    const parent = dirname(directory);
+    if (parent === directory) break;
+    if (depth === 63) return;
+    directory = parent;
+  }
+  for (const path of paths) if (!(await startupEnvPreservesDataRoot(path, derivesDefault))) return;
+  return resolve(launch.cwd, dataDirectory);
 }
 
 /** Enough for LOG_TAIL_LINES lines without reading a whole rotated log. */
@@ -1056,7 +1220,10 @@ export function startupTimeoutMessage(
       // rather than dropping the only evidence. Even a path that leaves no
       // room keeps a short end: the report cuts the message, not the advice
       // shown on screen. Whole characters only, so no emoji is split.
-      const room = Math.max(MIN_QUOTED_LINE_CHARS, MAX_MSG_CHARS - (message.length - lines[0].length) - 1);
+      const room = Math.max(
+        MIN_QUOTED_LINE_CHARS,
+        MAX_MSG_CHARS - (message.length - lines[0].length) - 1,
+      );
       const chars = Array.from(lines[0]);
       let kept = '';
       for (let i = chars.length - 1; i >= 0 && kept.length + chars[i].length <= room; i--) {
@@ -1113,6 +1280,8 @@ export class BackendSupervisor extends EventEmitter<{
   private exitSignal: string | null | undefined;
   private startedAt = Date.now();
   private child: ChildProcess | null = null;
+  /** The last spawned backend's pid: Windows names a crash's faulting module by it. */
+  private childPid: number | undefined;
   private readonly log: string[] = [];
   /** Only the spawned process's own output, for quoting back in failure messages. */
   private readonly childLog: string[] = [];
@@ -1126,12 +1295,25 @@ export class BackendSupervisor extends EventEmitter<{
    * problem was a native extension that would not load (#3058).
    */
   private readonly childErrorLog: string[] = [];
+  private setupFailedDownloadSource: { host: string } | null = null;
   /** When the spawned process last printed a line (0 = nothing yet this launch). */
   private lastChildOutputAt = 0;
+  /** When the running readiness wait's budget started; a launch retry moves it. */
+  private readinessClockAt = 0;
   /** The current managed launch's env and spawn time, for its own log. */
   private launchLog: BackendLaunchLog | null = null;
   /** Bumped on every start/shutdown so stale poll loops and exit handlers no-op. */
   private generation = 0;
+  private dataIdentity: string | undefined;
+  private dataIdentityChild: ChildProcess | null = null;
+  private identityChecked = false;
+  private identityProof: {
+    generation: number;
+    launch: BackendLaunchLog;
+    settled: boolean;
+    frozen: boolean;
+    value?: string;
+  } | null = null;
   /** A generation owns at most one health loop, even if readiness is observed twice. */
   private supervisingGeneration: number | null = null;
   /**
@@ -1296,6 +1478,13 @@ export class BackendSupervisor extends EventEmitter<{
       elapsedMs: Date.now() - this.startedAt,
       logTail: this.log.slice(-LOG_TAIL_LINES),
       lastCrash: this.crashes.latest(),
+      ...(this.managed &&
+      this.child &&
+      this.child === this.dataIdentityChild &&
+      !this.remoteUrl &&
+      this.dataIdentity
+        ? { dataIdentity: this.dataIdentity }
+        : {}),
       ...(app.isPackaged
         ? {
             runtimePath: dirname(this.runtimeProject ?? join(defaultRuntimeRoot(), 'project')),
@@ -1342,6 +1531,7 @@ export class BackendSupervisor extends EventEmitter<{
         status.smartAppControlWarning = true;
     }
     if (this.cpuSetupAvailable()) status.cpuSetupAvailable = true;
+    if (this.cpuRestartAvailable()) status.cpuRestartAvailable = true;
     if (/^(1|true|yes|on)$/i.test((process.env.OMNIVOICE_ANALYTICS_DISABLED ?? '').trim()))
       status.analyticsDisabled = true;
     if (this.diagnosis) status.diagnosis = this.diagnosis;
@@ -1365,7 +1555,16 @@ export class BackendSupervisor extends EventEmitter<{
 
   /** Attach to a backend already answering on the port, else spawn one. */
   async start(): Promise<void> {
+    // Read the GPU once, off the main thread, before any torch-variant resolution.
+    // A shutdown (or another start) during the probe must not be undone below.
+    const requested = this.generation;
+    await primeTorchVariantProbe();
+    if (this.generation !== requested) return;
     const gen = ++this.generation;
+    this.dataIdentity = undefined;
+    this.dataIdentityChild = null;
+    this.identityChecked = false;
+    this.identityProof = null;
     this.shuttingDown = false;
     this.startedAt = Date.now();
     this.exitCode = undefined;
@@ -1375,6 +1574,7 @@ export class BackendSupervisor extends EventEmitter<{
     // not quote the installer — setupRuntime's uv children share this ring.
     this.childLog.length = 0;
     this.childErrorLog.length = 0;
+    this.setupFailedDownloadSource = null;
     this.lastChildOutputAt = 0;
     this.setStage('attaching', { managed: false, message: undefined });
     try {
@@ -1562,6 +1762,7 @@ export class BackendSupervisor extends EventEmitter<{
     this.runtimeInterrupted = false;
     this.setupPhase = 'checking';
     this.setupProgress.reset();
+    this.setupFailedDownloadSource = null;
     this.setupLog.append(
       `Setup attempt: VoiceStudio ${__APP_VERSION__}; ${process.platform}/${process.arch}; region: ${this.runtimeRegion}`,
     );
@@ -1756,6 +1957,7 @@ export class BackendSupervisor extends EventEmitter<{
       }
     } catch (error) {
       if (gen === this.generation) {
+        this.setupFailedDownloadSource = runtimeFailureDownloadSource(error);
         const code = (error as NodeJS.ErrnoException)?.code;
         this.setupIssue =
           code === 'INTEL_MAC_UNSUPPORTED'
@@ -1766,7 +1968,9 @@ export class BackendSupervisor extends EventEmitter<{
                 ? 'missing_system_library'
                 : code === OUTDATED_SYSTEM_LIBRARY_CODE
                   ? 'outdated_system_library'
-                  : code === RUNTIME_FILES_LOCKED_CODE
+                  : code === TORCH_DLL_INIT_FAILED_CODE
+                    ? 'torch_dll_init_failed'
+                    : code === RUNTIME_FILES_LOCKED_CODE
                     ? 'files_locked'
                     : ['EACCES', 'EPERM', 'EROFS'].includes(code || '')
                       ? 'access'
@@ -1932,6 +2136,42 @@ export class BackendSupervisor extends EventEmitter<{
     this.setupPhase = 'checking';
     this.message = undefined;
     await this.setupRuntime();
+  }
+
+  /**
+   * Whether "Restart on CPU" can work: our own local backend crashed, and the
+   * stored Settings choice decides its device. An `OMNIVOICE_DEVICE` the user
+   * set in the environment wins over Settings, and a custom
+   * `OMNIVOICE_BACKEND_CMD` may not read VoiceStudio's settings at all, so
+   * writing them would not help in either case.
+   */
+  private cpuRestartAvailable(): boolean {
+    return (
+      this.stage === 'crashed' &&
+      this.managed &&
+      !this.remoteUrl &&
+      !parseBackendCmdOverride(process.env.OMNIVOICE_BACKEND_CMD) &&
+      Boolean(this.launchLog) &&
+      !this.launchLog?.env.OMNIVOICE_DEVICE?.trim()
+    );
+  }
+
+  /**
+   * Recovery that needs no running backend: Settings → Performance & Device
+   * cannot load or save while the engine is down, so the failure screen stores
+   * the same CPU choice in the backend's prefs.json and starts it again. The
+   * user switches back in that Settings control once a driver update is in.
+   */
+  async restartOnCpu(): Promise<void> {
+    const launch = this.launchLog;
+    if (!this.cpuRestartAvailable() || !launch)
+      throw new Error('Restart on CPU is only available after the local engine crashed');
+    await pinComputeDeviceToCpu(backendDataDir(launch));
+    this.pushLog(
+      'out',
+      'Compute device set to CPU from the failure screen; restarting the engine.',
+    );
+    await this.restart();
   }
 
   /** Kill the managed child (if any) and run the attach-or-spawn sequence again. */
@@ -2138,6 +2378,8 @@ export class BackendSupervisor extends EventEmitter<{
       return;
     }
     const progress = this.setupProgress.snapshot();
+    const failedSource = this.stage === 'setup_required' ? this.setupFailedDownloadSource : null;
+    const downloadHost = failedSource?.host ?? progress.downloadHost;
     // Quoted log lines are evidence, not the cause (#3724).
     const causeText = withoutBackendLogEvidence(this.message ?? '');
     const program = refusedProgram(causeText);
@@ -2146,7 +2388,7 @@ export class BackendSupervisor extends EventEmitter<{
       /Windows refused to load/.test(causeText) ||
       windowsLoadBlock(this.childErrorLog) !== null;
     const custom = Boolean(parseBackendCmdOverride(process.env.OMNIVOICE_BACKEND_CMD));
-    const build = (trust: TrustFacts = {}): InstallFailure => ({
+    const build = (trust: TrustFacts & FaultFacts = {}): InstallFailure => ({
       code: classifyInstallFailure({
         stage: this.stage,
         message: this.message,
@@ -2173,8 +2415,11 @@ export class BackendSupervisor extends EventEmitter<{
       errorCode: /\b(UNKNOWN|EPERM|EACCES|ENOENT|ENOSPC)\b/.exec(this.message ?? '')?.[1],
       ...(typeof this.exitCode === 'number' ? { exitCode: this.exitCode } : {}),
       ...(this.exitSignal ? { signal: String(this.exitSignal) } : {}),
-      ...(progress.downloadHost ? { downloadHost: progress.downloadHost } : {}),
-      ...(progress.downloadedBytes ? { downloadedBytes: progress.downloadedBytes } : {}),
+      ...(downloadHost ? { downloadHost } : {}),
+      // The transfer total belongs to the progress source, not a different failed archive.
+      ...(progress.downloadedBytes && (!failedSource || failedSource.host === progress.downloadHost)
+        ? { downloadedBytes: progress.downloadedBytes }
+        : {}),
       ...(progress.stalledSeconds ? { stalledSeconds: progress.stalledSeconds } : {}),
       proxyConfigured: Boolean(
         process.env.HTTPS_PROXY || process.env.https_proxy || process.env.ALL_PROXY,
@@ -2184,6 +2429,19 @@ export class BackendSupervisor extends EventEmitter<{
       ...trust,
     });
     this.failure = build();
+    if (!refused && this.stage === 'crashed' && this.managed) {
+      // A native fault's Python dump names a frame, not the library that crashed.
+      if (!isNativeFaultExit({ exitCode: this.exitCode, signal: this.exitSignal })) return;
+      void collectFaultFacts({
+        pid: this.childPid,
+        launchedAt: this.launchLog?.startedAt,
+      }).then((fault) => {
+        if (diagnosis !== this.failureDiagnosis || !fault.faultingModule) return;
+        this.failure = build(fault);
+        this.emitStatus();
+      });
+      return;
+    }
     if (!refused) return;
     void collectTrustFacts({
       program,
@@ -2318,7 +2576,73 @@ export class BackendSupervisor extends EventEmitter<{
   }
 
   /** Launch the resolved backend command and wire its lifecycle events. */
-  private spawnChild(plan: SpawnPlan, gen: number): void {
+  /**
+   * Schedules another launch after a transient spawn failure (the OS timed out or
+   * had no room for the process, #4035). False when the failure is final.
+   */
+  private retrySpawn(err: unknown, plan: SpawnPlan, gen: number, attempt: number): boolean {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code !== 'ETIMEDOUT' && code !== 'EAGAIN') return false;
+    if (attempt >= SPAWN_RETRY_DELAYS_MS.length) return false;
+    // A synchronous first failure leaves start() without a readiness wait; an
+    // asynchronous one keeps the wait that is already running for this launch.
+    const needsReadyWait = this.stage !== 'starting';
+    // Anything that moves the stage meanwhile (a backend answered, the user
+    // stopped it, a failure was reported) owns what happens next.
+    const stageAtFailure = this.stage;
+    const delay = SPAWN_RETRY_DELAYS_MS[attempt];
+    // The readiness wait already running counts its budget from the retried
+    // launch, not from the attempt that failed.
+    if (!needsReadyWait) this.readinessClockAt = Date.now() + delay;
+    this.pushLog(
+      'err',
+      `Starting the backend failed (${errorMessage(err)}); retrying in ${delay / 1000} s.`,
+    );
+    setTimeout(() => {
+      if (gen !== this.generation || this.shuttingDown || this.child) return;
+      if (this.stage !== stageAtFailure) return;
+      this.spawnChild(plan, gen, attempt + 1);
+      if (needsReadyWait && gen === this.generation && this.stage === 'starting') {
+        void this.waitUntilReady(gen, startupBudgetMs());
+      }
+    }, delay);
+    return true;
+  }
+
+  /** Optional proof starts before spawn and never delays readiness. */
+  private async prepareDataIdentity(launch: BackendLaunchLog, generation: number): Promise<void> {
+    const proof = {
+      generation,
+      launch,
+      settled: false,
+      frozen: false,
+      value: undefined as string | undefined,
+    };
+    this.identityProof = proof;
+    this.identityChecked = false;
+    this.dataIdentity = undefined;
+    this.dataIdentityChild = null;
+    try {
+      if (
+        !app.isPackaged ||
+        this.remoteUrl ||
+        parseBackendCmdOverride(launch.env.OMNIVOICE_BACKEND_CMD)
+      )
+        return;
+      const directory = await launchDataRootEstablished(launch);
+      if (!directory) return;
+      if (proof.frozen || this.identityProof !== proof || generation !== this.generation) return;
+      const value = await localDataIdentity(directory);
+      if (!proof.frozen && this.identityProof === proof && generation === this.generation)
+        proof.value = value;
+    } catch {
+      /* Unknown provenance must not affect backend startup. */
+    } finally {
+      proof.settled = true;
+    }
+  }
+
+  private spawnChild(plan: SpawnPlan, gen: number, attempt = 0): void {
     this.crashes.startProcess();
     const [command, ...args] = plan.argv;
     // A custom command bypasses the managed runtime; its own executable is the
@@ -2331,8 +2655,19 @@ export class BackendSupervisor extends EventEmitter<{
     console.log(`[backend] spawning in ${plan.cwd}: ${plan.argv.join(' ')}`);
     let child: ChildProcess;
     const processOptions = managedBackendSpawnOptions(this.port, this.runtimeRegion);
+    const fallback = applyWeightLoadFallback(processOptions.env, this.crashes.all());
+    if (fallback) {
+      console.log(`[backend] ${fallback}`);
+      this.pushLog('out', fallback);
+    }
     // Per launch: a failed spawn must not leave an older launch's log in place.
     this.launchLog = null;
+    const launch: BackendLaunchLog = {
+      env: processOptions.env,
+      cwd: plan.cwd,
+      startedAt: Date.now(),
+    };
+    void this.prepareDataIdentity(launch, gen);
     try {
       child = spawn(command, args, {
         cwd: plan.cwd,
@@ -2344,6 +2679,7 @@ export class BackendSupervisor extends EventEmitter<{
         detached: process.platform !== 'win32',
       });
     } catch (err) {
+      if (this.retrySpawn(err, plan, gen, attempt)) return;
       // The launch was ours: reports must not call this an attached backend.
       this.setStage('failed', {
         managed: runtimeOwned,
@@ -2352,7 +2688,8 @@ export class BackendSupervisor extends EventEmitter<{
       return;
     }
     this.child = child;
-    this.launchLog = { env: processOptions.env, cwd: plan.cwd, startedAt: Date.now() };
+    this.childPid = child.pid;
+    this.launchLog = launch;
     if (processOptions.drainFd !== null) {
       // Python passes this child-side descriptor to every nested operation.
       // Reading the parent side keeps the ownership channel live and lets
@@ -2375,6 +2712,9 @@ export class BackendSupervisor extends EventEmitter<{
     child.on('error', (err) => {
       if (gen !== this.generation) return;
       this.child = null;
+      // Node reports EAGAIN (and other resource limits) here rather than throwing;
+      // a child that never got a pid can be launched again.
+      if (child.pid === undefined && this.retrySpawn(err, plan, gen, attempt)) return;
       this.setStage('failed', {
         managed: runtimeOwned,
         message: spawnFailureMessage(command, err, { runtimeOwned }),
@@ -2464,7 +2804,7 @@ export class BackendSupervisor extends EventEmitter<{
       !/the specified module could not be found|could not find module/i.test(
         this.childErrorLog.slice(-20).join('\n'),
       ) &&
-      ['on', 'evaluation'].includes(readSmartAppControl())
+      readSmartAppControl() === 'on'
         ? 'application_control'
         : null);
     if (loadBlock) {
@@ -2633,6 +2973,22 @@ export class BackendSupervisor extends EventEmitter<{
     const credentials = await this.remoteCredentials();
     if (gen !== this.generation) return false;
     if (credentials === 'valid') {
+      if (!this.identityChecked) {
+        this.identityChecked = true;
+        const proof = this.identityProof;
+        if (proof) proof.frozen = true;
+        if (
+          proof?.settled &&
+          proof.generation === gen &&
+          proof.launch === this.launchLog &&
+          this.managed &&
+          this.child &&
+          !this.remoteUrl
+        ) {
+          this.dataIdentity = proof.value;
+          this.dataIdentityChild = this.child;
+        }
+      }
       // A healthy run must not leave import errors behind: a later unrelated
       // exit would otherwise match them and be misread as a broken runtime.
       this.childErrorLog.length = 0;
@@ -2669,7 +3025,7 @@ export class BackendSupervisor extends EventEmitter<{
     // candidates. Once that pre-spawn work outlasted the budget, this loop
     // failed on its very first probe — killing a backend that had been alive
     // for a second and reporting "did not answer within 300 s".
-    const pollStartedAt = Date.now();
+    this.readinessClockAt = Date.now();
     const waitingStage = this.stage;
     while (gen === this.generation && this.stage === waitingStage) {
       const ready = await this.probe();
@@ -2683,7 +3039,7 @@ export class BackendSupervisor extends EventEmitter<{
       if (gen !== this.generation || (this.stage !== 'starting' && this.stage !== 'attaching')) {
         return;
       }
-      if (Date.now() > readinessDeadline(pollStartedAt, budgetMs, this.lastChildOutputAt)) {
+      if (Date.now() > readinessDeadline(this.readinessClockAt, budgetMs, this.lastChildOutputAt)) {
         this.generation++;
         // killChild() nulls this.child, so record whether this launch owned a
         // process *before* tearing it down. Checking afterwards would
@@ -2731,21 +3087,28 @@ export class BackendSupervisor extends EventEmitter<{
     let rejections = 0;
     // Healthy ticks since an auth_required remote was last re-validated.
     let authRecheck = 0;
+    // Consecutive healthy probes: a steady backend is probed less often.
+    let healthy = 0;
     const noteMiss = (): number => {
       refusals = this.lastProbeOutcome === 'refused' ? refusals + 1 : 0;
       rejections = this.lastProbeOutcome === 'rejected' ? rejections + 1 : 0;
+      healthy = 0;
       return ++misses;
     };
     const release = (): void => {
       if (this.supervisingGeneration === gen) this.supervisingGeneration = null;
     };
     const tick = async (): Promise<void> => {
-      await delay(SUPERVISE_POLL_MS);
+      await delay(superviseDelayMs(healthy));
       if (gen !== this.generation) {
         release();
         return;
       }
       if (await this.probe()) {
+        // Only a backend that is ready and settled earns the slower cadence; a
+        // recovering or auth_required one keeps the active period, so its
+        // tick-counted re-validation (AUTH_RECHECK_TICKS) stays about 30 s.
+        healthy = this.stage === 'ready' && !this.diagnosis ? healthy + 1 : 0;
         misses = 0;
         refusals = 0;
         rejections = 0;

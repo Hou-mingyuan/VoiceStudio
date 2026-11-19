@@ -47,6 +47,8 @@ beforeEach(() => {
   delete backendStatus.setupPhase;
   delete backendStatus.setupProgress;
   delete backendStatus.setupHardware;
+  delete backendStatus.failure;
+  delete backendStatus.cpuRestartAvailable;
   platform.current = 'linux';
 });
 
@@ -166,6 +168,20 @@ it('lists install steps with the active package on the current step and the log 
   fireEvent.click(cancel);
   expect(restart).toHaveBeenCalledTimes(1);
 });
+
+it.each(['starting', 'attaching'] as const)(
+  'does not claim a first run on an ordinary %s launch (#4228)',
+  (stage) => {
+    backendStatus.stage = stage;
+    render(
+      <BackendGate>
+        <div>workspace</div>
+      </BackendGate>,
+    );
+    expect(screen.queryByText(i18n.t('backend.first_run_hint'))).not.toBeInTheDocument();
+    expect(screen.getByText(i18n.t(`backend.${stage}`))).toBeInTheDocument();
+  },
+);
 
 it('keeps the download bar live when a new download follows a prepared batch', () => {
   backendStatus.stage = 'installing';
@@ -476,6 +492,70 @@ it('names a native crash and makes Copy diagnostics the primary action', () => {
   expect(screen.getByRole('button', { name: i18n.t('backend.retry') })).toBeEnabled();
 });
 
+it('offers Restart on CPU after a graphics driver crash, without the engine running', async () => {
+  const restartOnCpu = vi.fn(async () => undefined);
+  bridgeStub.current = { backend: { restartOnCpu, restart: vi.fn() } };
+  backendStatus.message = 'Backend exited unexpectedly (exit code 3221225477).';
+  backendStatus.failure = {
+    code: 'NATIVE_ACCESS_VIOLATION',
+    stage: 'crashed',
+    faultingModule: 'nvcuda64.dll',
+  };
+  backendStatus.cpuRestartAvailable = true;
+
+  renderGate('crashed');
+
+  expect(screen.getByTestId('backend-hint')).toHaveTextContent(
+    i18n.t('backend.hint_gpu_driver_fault'),
+  );
+  fireEvent.click(screen.getByRole('button', { name: i18n.t('backend.restart_on_cpu') }));
+  await waitFor(() => expect(restartOnCpu).toHaveBeenCalledTimes(1));
+  expect(screen.queryByTestId('backend-restart-cpu-error')).not.toBeInTheDocument();
+});
+
+it('explains a Restart on CPU that could not save the setting, and keeps it retryable', async () => {
+  const restartOnCpu = vi.fn(async () => {
+    throw new Error('prefs.json is not a settings object');
+  });
+  bridgeStub.current = { backend: { restartOnCpu, restart: vi.fn() } };
+  backendStatus.message = 'Backend exited unexpectedly (exit code 3221225477).';
+  backendStatus.failure = {
+    code: 'NATIVE_ACCESS_VIOLATION',
+    stage: 'crashed',
+    faultingModule: 'nvcuda64.dll',
+  };
+  backendStatus.cpuRestartAvailable = true;
+
+  renderGate('crashed');
+  const button = screen.getByRole('button', { name: i18n.t('backend.restart_on_cpu') });
+  fireEvent.click(button);
+
+  expect(await screen.findByTestId('backend-restart-cpu-error')).toHaveTextContent(
+    i18n.t('backend.restart_on_cpu_failed'),
+  );
+  expect(button).toBeEnabled();
+  expect(screen.getByRole('button', { name: i18n.t('backend.retry') })).toBeEnabled();
+});
+
+it('offers no CPU restart for a crash outside the graphics driver or when it cannot work', () => {
+  backendStatus.message = 'Backend exited unexpectedly (exit code 3221225477).';
+  backendStatus.failure = {
+    code: 'NATIVE_ACCESS_VIOLATION',
+    stage: 'crashed',
+    faultingModule: 'libiomp5md.dll',
+  };
+  backendStatus.cpuRestartAvailable = true;
+  const { unmount } = renderGate('crashed');
+  expect(screen.queryByTestId('backend-restart-cpu')).not.toBeInTheDocument();
+  unmount();
+
+  // OMNIVOICE_DEVICE pinned or a remote engine: main reports it unavailable.
+  backendStatus.failure = { ...backendStatus.failure, faultingModule: 'nvcuda64.dll' };
+  backendStatus.cpuRestartAvailable = false;
+  renderGate('crashed');
+  expect(screen.queryByTestId('backend-restart-cpu')).not.toBeInTheDocument();
+});
+
 it('explains an externally killed backend (exit code 4294967295) on the live screen', () => {
   backendStatus.message = 'Backend exited unexpectedly (exit code 4294967295).';
 
@@ -576,6 +656,16 @@ it('warns about Smart App Control before the download without blocking install',
   );
   expect(screen.getByRole('button', { name: i18n.t('common.resume') })).toBeEnabled();
   delete backendStatus.smartAppControlWarning;
+});
+
+it('shows localized guidance for a torch DLL failure with no established cause (#4230)', () => {
+  backendStatus.message = 'Importing "faster_whisper" failed (WinError 1114)';
+  backendStatus.setupIssue = 'torch_dll_init_failed';
+
+  renderGate('setup_required');
+
+  expect(screen.getByText(i18n.t('backend.setup_torch_dll_init_failed'))).toBeVisible();
+  delete backendStatus.setupIssue;
 });
 
 it('shows download guidance on a failed setup', () => {
@@ -1079,4 +1169,43 @@ it('keeps an in-flight interpreter check and its result across closing and reope
   expect(screen.getByTestId('python-runtime-staged')).toHaveTextContent('/opt/py/bin/python');
   expect(screen.getByTestId('python-runtime-confirm')).toBeEnabled();
   expect(choosePythonRuntime).toHaveBeenCalledOnce();
+});
+
+it('offers independent diagnostic consent before setup and keeps the choice through failures', async () => {
+  const setConsent = vi.fn(async () => ({
+    enabled: false, opted_in: false, available: true, prompted: true,
+  }));
+  bridgeStub.current = {
+    backend: {},
+    diagnostics: {
+      getStatus: vi.fn(async () => ({
+        enabled: false, opted_in: false, available: true, prompted: false,
+      })),
+      setConsent,
+      capture: vi.fn(async () => {}),
+    },
+  };
+  localStorage.setItem(
+    'voicestudio.setup.analytics-consent.v1',
+    JSON.stringify({ enabled: true, settled: true }),
+  );
+  const tree = <BackendGate><div>workspace</div></BackendGate>;
+  try {
+    const view = render(tree);
+    expect(await screen.findByRole('button', { name: i18n.t('diagnostics.allow') })).toBeEnabled();
+    for (const stage of ['installing', 'crashed'] as const) {
+      backendStatus.stage = stage;
+      view.rerender(<BackendGate><div>workspace</div></BackendGate>);
+      expect(await screen.findByRole('button', { name: i18n.t('diagnostics.allow') })).toBeEnabled();
+    }
+    expect(setConsent).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('diagnostics.keep_off') }));
+    await waitFor(() => expect(setConsent).toHaveBeenCalledWith(false));
+    await waitFor(() => expect(
+      screen.queryByRole('button', { name: i18n.t('diagnostics.allow') }),
+    ).not.toBeInTheDocument());
+    expect(screen.getByRole('switch', { name: i18n.t('diagnostics.title') })).not.toBeChecked();
+  } finally {
+    localStorage.removeItem('voicestudio.setup.analytics-consent.v1');
+  }
 });

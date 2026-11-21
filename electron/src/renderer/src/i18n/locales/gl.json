@@ -753,7 +753,8 @@
     "unknown": "descoñecido",
     "remove": "Eliminar {{term}}",
     "not_set": "Non definido",
-    "details": "Detalles"
+    "details": "Detalles",
+    "link_blocked": "Non se pode abrir esta ligazón. Só se permiten ligazóns web e de correo."
   },
   "preferences": {
     "title": "Configuración",
@@ -2956,6 +2957,8 @@
     "free": "Libre",
     "pro": "Pro",
     "get_pro": "Obtén Pro",
+    "upgrade_pro": "Mellorar a Pro",
+    "get_pro_app": "Obter a app Pro",
     "sponsor_bar": "Barra de patrocinadores",
     "visible": "Visible",
     "hideable": "Pódese ocultar",

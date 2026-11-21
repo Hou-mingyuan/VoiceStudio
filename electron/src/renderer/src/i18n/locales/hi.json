@@ -945,7 +945,8 @@
     "retry": "पुनः प्रयास करें",
     "confirm": "पुष्टि करें",
     "details": "विवरण",
-    "unknown": "अज्ञात"
+    "unknown": "अज्ञात",
+    "link_blocked": "यह लिंक नहीं खोला जा सकता। केवल वेब और ईमेल लिंक की अनुमति है।"
   },
   "dubWorkspace": {
     "transcriptIssues": "प्रतिलेख की समस्याएँ",
@@ -2956,6 +2957,8 @@
     "free": "मुफ़्त",
     "pro": "Pro",
     "get_pro": "Pro लें",
+    "upgrade_pro": "Pro में अपग्रेड करें",
+    "get_pro_app": "Pro ऐप पाएँ",
     "sponsor_bar": "प्रायोजक बार",
     "visible": "दिखाई देता है",
     "hideable": "छिपाया जा सकता है",

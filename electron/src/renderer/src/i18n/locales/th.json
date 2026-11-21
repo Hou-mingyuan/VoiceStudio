@@ -945,7 +945,8 @@
     "retry": "ลองอีกครั้ง",
     "confirm": "ยืนยัน",
     "details": "รายละเอียด",
-    "unknown": "ไม่ทราบ"
+    "unknown": "ไม่ทราบ",
+    "link_blocked": "ไม่สามารถเปิดลิงก์นี้ได้ อนุญาตเฉพาะลิงก์เว็บและอีเมลเท่านั้น"
   },
   "dubWorkspace": {
     "transcriptIssues": "ปัญหาในข้อความถอดเสียง",
@@ -2956,6 +2957,8 @@
     "free": "ฟรี",
     "pro": "Pro",
     "get_pro": "รับ Pro",
+    "upgrade_pro": "อัปเกรดเป็น Pro",
+    "get_pro_app": "รับแอป Pro",
     "sponsor_bar": "แถบผู้สนับสนุน",
     "visible": "แสดง",
     "hideable": "ซ่อนได้",

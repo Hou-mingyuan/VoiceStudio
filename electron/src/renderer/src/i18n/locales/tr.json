@@ -945,7 +945,8 @@
     "retry": "Tekrar dene",
     "confirm": "Onayla",
     "details": "Ayrıntılar",
-    "unknown": "bilinmiyor"
+    "unknown": "bilinmiyor",
+    "link_blocked": "Bu bağlantı açılamıyor. Yalnızca web ve e-posta bağlantılarına izin verilir."
   },
   "dubWorkspace": {
     "transcriptIssues": "Transkript sorunları",
@@ -2956,6 +2957,8 @@
     "free": "Ücretsiz",
     "pro": "Pro",
     "get_pro": "Pro'yu edin",
+    "upgrade_pro": "Pro'ya yükselt",
+    "get_pro_app": "Pro uygulamasını edin",
     "sponsor_bar": "Sponsor çubuğu",
     "visible": "Görünür",
     "hideable": "Gizlenebilir",

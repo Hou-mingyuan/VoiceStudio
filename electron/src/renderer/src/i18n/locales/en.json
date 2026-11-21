@@ -753,7 +753,8 @@
     "unknown": "unknown",
     "remove": "Remove {{term}}",
     "not_set": "Not set",
-    "details": "Details"
+    "details": "Details",
+    "link_blocked": "This link can't be opened. Only web and email links are allowed."
   },
   "preferences": {
     "title": "Settings",
@@ -2956,6 +2957,8 @@
     "free": "Free",
     "pro": "Pro",
     "get_pro": "Get Pro",
+    "upgrade_pro": "Upgrade to Pro",
+    "get_pro_app": "Get Pro app",
     "sponsor_bar": "Sponsor bar",
     "visible": "Visible",
     "hideable": "Can be hidden",

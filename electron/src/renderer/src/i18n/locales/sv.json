@@ -945,7 +945,8 @@
     "retry": "Försök igen",
     "confirm": "Bekräfta",
     "details": "Detaljer",
-    "unknown": "okänd"
+    "unknown": "okänd",
+    "link_blocked": "Länken kan inte öppnas. Endast webb- och e-postlänkar är tillåtna."
   },
   "dubWorkspace": {
     "transcriptIssues": "Problem i transkriptionen",
@@ -2956,6 +2957,8 @@
     "free": "Gratis",
     "pro": "Pro",
     "get_pro": "Skaffa Pro",
+    "upgrade_pro": "Uppgradera till Pro",
+    "get_pro_app": "Hämta Pro-appen",
     "sponsor_bar": "Sponsorfält",
     "visible": "Synligt",
     "hideable": "Kan döljas",

@@ -945,7 +945,8 @@
     "retry": "Probeer het opnieuw",
     "confirm": "Bevestigen",
     "details": "Details",
-    "unknown": "onbekend"
+    "unknown": "onbekend",
+    "link_blocked": "Deze link kan niet worden geopend. Alleen web- en e-maillinks zijn toegestaan."
   },
   "dubWorkspace": {
     "transcriptIssues": "Problemen in transcript",
@@ -2956,6 +2957,8 @@
     "free": "Gratis",
     "pro": "Pro",
     "get_pro": "Pro nemen",
+    "upgrade_pro": "Upgraden naar Pro",
+    "get_pro_app": "Pro-app downloaden",
     "sponsor_bar": "Sponsorbalk",
     "visible": "Zichtbaar",
     "hideable": "Kan worden verborgen",

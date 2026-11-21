@@ -945,7 +945,8 @@
     "refresh": "새로 고침",
     "remove": "{{term}} 제거",
     "retry": "다시 시도",
-    "unknown": "알 수 없음"
+    "unknown": "알 수 없음",
+    "link_blocked": "이 링크를 열 수 없습니다. 웹 및 이메일 링크만 허용됩니다."
   },
   "dubWorkspace": {
     "transcriptIssues": "전사 문제",
@@ -2956,6 +2957,8 @@
     "free": "무료",
     "pro": "Pro",
     "get_pro": "Pro 받기",
+    "upgrade_pro": "Pro로 업그레이드",
+    "get_pro_app": "Pro 앱 받기",
     "sponsor_bar": "스폰서 바",
     "visible": "표시됨",
     "hideable": "숨길 수 있음",

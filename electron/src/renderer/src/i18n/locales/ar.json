@@ -973,7 +973,8 @@
     "retry": "حاول مرة أخرى",
     "confirm": "تأكيد",
     "details": "التفاصيل",
-    "unknown": "مجهول"
+    "unknown": "مجهول",
+    "link_blocked": "تعذّر فتح هذا الرابط. يُسمح فقط بروابط الويب والبريد الإلكتروني."
   },
   "dubWorkspace": {
     "transcriptIssues": "مشكلات النص",
@@ -3008,6 +3009,8 @@
     "free": "مجاني",
     "pro": "Pro",
     "get_pro": "احصل على Pro",
+    "upgrade_pro": "الترقية إلى Pro",
+    "get_pro_app": "احصل على تطبيق Pro",
     "sponsor_bar": "شريط الرعاة",
     "visible": "ظاهر",
     "hideable": "يمكن إخفاؤه",

@@ -945,7 +945,8 @@
     "retry": "Versuchen Sie es erneut",
     "confirm": "Bestätigen",
     "details": "Details",
-    "unknown": "unbekannt"
+    "unknown": "unbekannt",
+    "link_blocked": "Dieser Link kann nicht geöffnet werden. Erlaubt sind nur Web- und E-Mail-Links."
   },
   "dubWorkspace": {
     "transcriptIssues": "Probleme im Transkript",
@@ -2956,6 +2957,8 @@
     "free": "Kostenlos",
     "pro": "Pro",
     "get_pro": "Pro holen",
+    "upgrade_pro": "Auf Pro upgraden",
+    "get_pro_app": "Pro-App holen",
     "sponsor_bar": "Sponsorenleiste",
     "visible": "Sichtbar",
     "hideable": "Ausblendbar",

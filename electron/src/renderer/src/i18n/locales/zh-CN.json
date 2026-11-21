@@ -959,7 +959,8 @@
     "details": "详情",
     "error": "出现了问题",
     "loading": "正在加载…",
-    "saving": "正在保存…"
+    "saving": "正在保存…",
+    "link_blocked": "无法打开此链接。仅允许网页和电子邮件链接。"
   },
   "dubWorkspace": {
     "transcriptIssues": "转录问题",
@@ -2952,6 +2953,8 @@
     "free": "免费版",
     "pro": "Pro",
     "get_pro": "获取 Pro",
+    "upgrade_pro": "升级到 Pro",
+    "get_pro_app": "获取 Pro 应用",
     "sponsor_bar": "赞助商栏",
     "visible": "显示",
     "hideable": "可隐藏",

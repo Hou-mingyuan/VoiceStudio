@@ -947,7 +947,8 @@
     "retry": "Inténtalo de nuevo",
     "confirm": "Confirmar",
     "details": "Detalles",
-    "unknown": "desconocido"
+    "unknown": "desconocido",
+    "link_blocked": "No se puede abrir este enlace. Solo se permiten enlaces web y de correo."
   },
   "dubWorkspace": {
     "transcriptIssues": "Problemas de la transcripción",
@@ -2958,6 +2959,8 @@
     "free": "Gratis",
     "pro": "Pro",
     "get_pro": "Obtener Pro",
+    "upgrade_pro": "Mejorar a Pro",
+    "get_pro_app": "Obtener la app Pro",
     "sponsor_bar": "Barra de patrocinadores",
     "visible": "Visible",
     "hideable": "Se puede ocultar",

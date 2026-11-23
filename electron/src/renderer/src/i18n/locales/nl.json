@@ -1624,7 +1624,8 @@
     "open": "‘{{name}}’ openen en het huidige concept vervangen? Sla je werk eerst op.",
     "save_copy": "Kopie opslaan",
     "new": "Nieuw project",
-    "new_confirm": "Een nieuw, leeg project beginnen? Opgeslagen projecten blijven ongewijzigd; niet-opgeslagen wijzigingen in het huidige concept gaan verloren."
+    "new_confirm": "Een nieuw, leeg project beginnen? Opgeslagen projecten blijven ongewijzigd; niet-opgeslagen wijzigingen in het huidige concept gaan verloren.",
+    "delete_hint": "Alleen het opgeslagen project wordt uit de lijst verwijderd. Mediabestanden en stemmen blijven behouden."
   },
   "sidebar": {
     "save_project": "Dub-project opslaan",
@@ -2251,6 +2252,10 @@
     "dubbing_cta": "Voer dit uit op uw eigen video →",
     "dubbing_loading": "Dubdemo laden…",
     "dubbing_dismiss": "Nasynchronisatiedemo sluiten",
+    "dubbing_download": "Demovideo's downloaden (~10 MB)",
+    "dubbing_downloading": "Downloaden…",
+    "dubbing_download_failed": "Downloaden mislukt. Controleer je verbinding.",
+    "dubbing_retry": "Opnieuw proberen",
     "original_tag": "origineel",
     "dubbed_tag": "nagesynchroniseerd",
     "script_conversational": "Gemoedelijk",
@@ -2938,7 +2943,8 @@
     "missingSpeech": "Spraak ontbreekt of is onleesbaar. Genereer het betreffende segment opnieuw voordat je exporteert.",
     "timingOverflow": "De spraak overschrijdt het tijdvak. Verkort de vertaling of kies een strikt tijdvak of het uitrekken van de video.",
     "sourceChanged": "De ondertitels zijn gewijzigd terwijl deze nasynchronisatie werd gemaakt. Het vorige spoor is behouden; genereer opnieuw om de nieuwe ondertitels te gebruiken.",
-    "backgroundUnavailable": "Het oorspronkelijke geluid kon niet behouden blijven. Controleer de achtergrondscheiding en dialoogtijden en probeer opnieuw, of kies expliciet voor alleen spraak exporteren."
+    "backgroundUnavailable": "Het oorspronkelijke geluid kon niet behouden blijven. Controleer de achtergrondscheiding en dialoogtijden en probeer opnieuw, of kies expliciet voor alleen spraak exporteren.",
+    "untranslated": "Dit spoor heeft nog geen vertaling: alle regels komen nog overeen met de brontekst. Vertaal het of kies de brontaal en genereer opnieuw."
   },
   "dubStyle": {
     "label": "Instructies voor vertaalstijl",
@@ -3355,7 +3361,8 @@
     "denoise": "Ruis uit referentie verwijderen",
     "polish": "Gegenereerde audio verfijnen",
     "basics": "1× is normale snelheid. Laat de duur leeg voor een natuurlijk ritme.",
-    "hint": "Gebruik doorgaans de standaardwaarden. Sturing bepaalt de invloed van de instructie; de andere instellingen veranderen hoe het model geluid opbouwt. Wijzig één instelling tegelijk."
+    "hint": "Gebruik doorgaans de standaardwaarden. Sturing bepaalt de invloed van de instructie; de andere instellingen veranderen hoe het model geluid opbouwt. Wijzig één instelling tegelijk.",
+    "pauses_hint": "Voegt stilte toe bij lege regels. 0 behoudt het eigen tempo van de engine."
   },
   "languagePicker": {
     "dialectFollowsVoice": "{{model}} heeft één model voor het {{language}}, dus het accent volgt de referentiestem.",

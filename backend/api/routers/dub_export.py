@@ -54,13 +54,28 @@ router = APIRouter()
 logger = logging.getLogger("omnivoice.api")
 
 
-async def _preserved_background(job: dict, job_id: str, lang: str, *, prepare: bool = True) -> str:
-    """All mixed preview/download paths share the same dialogue-only bed."""
+async def _preserved_background(job: dict, job_id: str, lang: str, *, prepare: bool = True) -> str | None:
+    """All mixed preview/download paths share the same dialogue-only bed.
+
+    Returns ``None`` when the job never had a separated bed (Demucs failed or
+    was OOM-killed at ingest, #4346): a finished dub must still export, so the
+    callers fall back to the speech-only mix instead of a terminal 409.
+    """
     from services.dub_background import surgical_background
 
     bed = _optional_dub_artifact(job.get("no_vocals_path"), job_id)
+    if not bed:
+        status = str(job.get("background_separation") or "missing")
+        # A voice-only request skipped separation on purpose (#4218): speech-only
+        # is the requested result, not a degradation worth a warning.
+        logger.log(
+            logging.INFO if status == "skipped" else logging.WARNING,
+            "Job %s has no separated background (separation=%s); exporting %s speech-only",
+            log_safe(job_id), log_safe(status), log_safe(lang),
+        )
+        return None
     source = _optional_dub_artifact(job.get("video_path"), job_id) or _optional_dub_artifact(job.get("audio_path"), job_id)
-    if not bed or not source:
+    if not source:
         raise HTTPException(status_code=409, detail={"code": "dub_background_unavailable", "message": "Original audio and background separation are required"})
     track = (job.get("dubbed_tracks") or {}).get(lang) or {}
     segments = track.get("source_segments") or job.get("segments") or []
@@ -217,6 +232,9 @@ def _discover_job_artifact(path: Path, job_id: str) -> Path | None:
 
 def _dub_artifact(value: object, job_id: str, *, missing_detail: str = "File not found") -> str:
     """Resolve a persisted job artifact inside the global dub-data boundary."""
+    if not value:
+        # A subtitle-only job (POST /dub/from-srt) never had source media.
+        raise HTTPException(status_code=404, detail=missing_detail)
     try:
         resolved = _resolve_dub_artifact(value, job_id)
     except UnsafePath as exc:
@@ -792,7 +810,6 @@ async def dub_download(
     if not filtered_tracks and not include_original:
         raise HTTPException(status_code=400, detail="No tracks selected for export")
 
-    video_path = _dub_artifact(job["video_path"], job_id, missing_detail="Source video not found")
     stamp = _unique_stamp()
     exports_dir = os.path.join(job_dir, "exports")
     os.makedirs(exports_dir, exist_ok=True)
@@ -867,6 +884,10 @@ async def dub_download(
             out_path, media_type=media_type,
             headers={"Content-Disposition": content_disposition(dl_name)},
         )
+
+    # Audio jobs returned above and need no source media (a subtitle-only job
+    # has none); only the video export resolves it.
+    video_path = _dub_artifact(job.get("video_path"), job_id, missing_detail="Source video not found")
 
     # Determine whether this export should drive video through a per-segment
     # retime (legacy stretch_video Mode B, or Smart Fit). Retime is keyed off
@@ -975,11 +996,15 @@ async def dub_download(
     bg_idx = None
     tracks_to_process = []
     for lang_code, track_info in filtered_tracks.items():
+        # Per track: a lookup that finds no bed must not inherit the previous
+        # track's bed (timed for another language).
+        bg_idx = None
         if preserve_bg:
             bg_audio = await _preserved_background(job, job_id, lang_code)
-            cmd += ["-i", bg_audio]
-            bg_idx = input_idx
-            input_idx += 1
+            if bg_audio:
+                cmd += ["-i", bg_audio]
+                bg_idx = input_idx
+                input_idx += 1
         cmd += ["-i", track_info["path"]]
         tracks_to_process.append({"lang_code": lang_code, "idx": input_idx, "bg_idx": bg_idx, "info": track_info})
         input_idx += 1
@@ -1065,25 +1090,21 @@ async def dub_download(
     ):
         apad_dur = retime_decision.video_dur
 
-    if bg_idx is not None:
-        for i, t in enumerate(tracks_to_process):
+    for i, t in enumerate(tracks_to_process):
+        if t["bg_idx"] is not None:
             tail = f",apad=whole_dur={apad_dur:.4f}" if apad_dur else ""
             filter_parts.append(bed_mix_filter(
                 f"{t['bg_idx']}:a", f"{t['idx']}:a", out=f"aout{i}", tail=tail, uniq=str(i), bed_gain=bed_level,
             ))
             t["out_label"] = f"[aout{i}]"
-        for t in tracks_to_process:
-            cmd += ["-map", t["out_label"]]
-    elif apad_dur:
-        for i, t in enumerate(tracks_to_process):
+        elif apad_dur:
             out_label = f"[aout{i}]"
             filter_parts.append(f"[{t['idx']}:a]apad=whole_dur={apad_dur:.4f}{out_label}")
             t["out_label"] = out_label
-        for t in tracks_to_process:
-            cmd += ["-map", t["out_label"]]
-    else:
-        for t in tracks_to_process:
-            cmd += ["-map", f"{t['idx']}:a:0"]
+        else:
+            t["out_label"] = f"{t['idx']}:a:0"
+    for t in tracks_to_process:
+        cmd += ["-map", t["out_label"]]
 
     if filter_parts:
         cmd += ["-filter_complex", ";".join(filter_parts)]
@@ -1221,7 +1242,7 @@ async def dub_get_media(job_id: str, request: Request):
     job = _get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    video_path = _dub_artifact(job["video_path"], job_id, missing_detail="Media file not found")
+    video_path = _dub_artifact(job.get("video_path"), job_id, missing_detail="Media file not found")
     # Pass an explicit media_type. Without this Starlette falls back to
     # mimetypes.guess_type, which on some platforms returns the wrong
     # MIME (e.g. "application/octet-stream" for .mkv), and the Tauri

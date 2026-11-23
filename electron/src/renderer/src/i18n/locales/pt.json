@@ -1626,7 +1626,8 @@
     "open": "Abrir “{{name}}” e substituir o rascunho atual? Salve seu trabalho primeiro.",
     "save_copy": "Salvar uma cópia",
     "new": "Novo projeto",
-    "new_confirm": "Começar um projeto novo e vazio? Os projetos salvos permanecem como estão; as alterações não salvas no rascunho atual serão perdidas."
+    "new_confirm": "Começar um projeto novo e vazio? Os projetos salvos permanecem como estão; as alterações não salvas no rascunho atual serão perdidas.",
+    "delete_hint": "Só o projeto guardado é removido da lista. Os ficheiros multimédia e as vozes são mantidos."
   },
   "sidebar": {
     "save_project": "Salvar projeto de dublagem",
@@ -2253,6 +2254,10 @@
     "dubbing_cta": "Execute isso em seu próprio vídeo →",
     "dubbing_loading": "Carregando demonstração de dublagem…",
     "dubbing_dismiss": "Ignorar demonstração de dublagem",
+    "dubbing_download": "Baixar vídeos de demonstração (~10 MB)",
+    "dubbing_downloading": "Baixando…",
+    "dubbing_download_failed": "O download falhou. Verifique sua conexão.",
+    "dubbing_retry": "Tentar novamente",
     "original_tag": "originais",
     "dubbed_tag": "dublado",
     "script_conversational": "Conversacional",
@@ -2940,7 +2945,8 @@
     "missingSpeech": "A fala está ausente ou ilegível. Gere novamente o segmento afetado antes de exportar.",
     "timingOverflow": "A fala excede o intervalo de tempo. Encurte a tradução ou escolha um intervalo estrito ou estique o vídeo.",
     "sourceChanged": "As legendas mudaram enquanto esta dublagem era gerada. A faixa anterior foi mantida; gere novamente para usar as novas legendas.",
-    "backgroundUnavailable": "Não foi possível preservar o som original. Verifique a separação do fundo e os tempos do diálogo e tente novamente, ou escolha exportar apenas a fala."
+    "backgroundUnavailable": "Não foi possível preservar o som original. Verifique a separação do fundo e os tempos do diálogo e tente novamente, ou escolha exportar apenas a fala.",
+    "untranslated": "Esta faixa ainda não tem tradução: todas as falas continuam iguais ao texto original. Traduza-a ou escolha o idioma de origem e gere novamente."
   },
   "dubStyle": {
     "label": "Instruções de estilo de tradução",
@@ -3357,7 +3363,8 @@
     "denoise": "Limpar ruído da referência",
     "polish": "Aprimorar o áudio gerado",
     "basics": "1× é a velocidade normal. Deixe a duração vazia para um ritmo natural.",
-    "hint": "Em geral, mantenha os valores padrão. A orientação ajusta a influência da instrução; os outros controles mudam como o modelo constrói o som. Altere um de cada vez."
+    "hint": "Em geral, mantenha os valores padrão. A orientação ajusta a influência da instrução; os outros controles mudam como o modelo constrói o som. Altere um de cada vez.",
+    "pauses_hint": "Adiciona silêncio nas linhas em branco. 0 mantém o ritmo próprio do motor."
   },
   "languagePicker": {
     "dialectFollowsVoice": "{{model}} tem um único modelo de {{language}}, por isso o sotaque segue a voz de referência.",

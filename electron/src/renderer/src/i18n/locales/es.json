@@ -1626,7 +1626,8 @@
     "open": "¿Abrir «{{name}}» y reemplazar el borrador actual? Guarda tu trabajo primero.",
     "save_copy": "Guardar una copia",
     "new": "Nuevo proyecto",
-    "new_confirm": "¿Empezar un proyecto nuevo y vacío? Los proyectos guardados no cambian; los cambios sin guardar del borrador actual se perderán."
+    "new_confirm": "¿Empezar un proyecto nuevo y vacío? Los proyectos guardados no cambian; los cambios sin guardar del borrador actual se perderán.",
+    "delete_hint": "Solo se elimina el proyecto guardado de la lista. Se conservan los archivos de audio y vídeo y las voces."
   },
   "sidebar": {
     "save_project": "Guardar proyecto de doblaje",
@@ -2253,6 +2254,10 @@
     "dubbing_cta": "Ejecute esto en su propio video →",
     "dubbing_loading": "Cargando demostración de doblaje…",
     "dubbing_dismiss": "Descartar demostración de doblaje",
+    "dubbing_download": "Descargar vídeos de demostración (~10 MB)",
+    "dubbing_downloading": "Descargando…",
+    "dubbing_download_failed": "La descarga falló. Revisa tu conexión.",
+    "dubbing_retry": "Reintentar",
     "original_tag": "originales",
     "dubbed_tag": "apodado",
     "script_conversational": "conversacional",
@@ -2940,7 +2945,8 @@
     "missingSpeech": "Falta audio de voz o no se puede leer. Regenera el segmento afectado antes de exportar.",
     "timingOverflow": "La voz supera su intervalo de tiempo. Acorta la traducción o elige un intervalo estricto o alargar el vídeo.",
     "sourceChanged": "Los subtítulos cambiaron mientras se generaba este doblaje. Se conservó la pista anterior; vuelve a generarlo para usar los nuevos subtítulos.",
-    "backgroundUnavailable": "No se pudo conservar el sonido original. Revisa la separación del fondo y los tiempos del diálogo e inténtalo de nuevo, o exporta solo la voz explícitamente."
+    "backgroundUnavailable": "No se pudo conservar el sonido original. Revisa la separación del fondo y los tiempos del diálogo e inténtalo de nuevo, o exporta solo la voz explícitamente.",
+    "untranslated": "Esta pista aún no tiene traducción: todas las líneas siguen igual que el texto original. Tradúcela o elige el idioma de origen y vuelve a generar."
   },
   "dubStyle": {
     "label": "Instrucciones de estilo de traducción",
@@ -3357,7 +3363,8 @@
     "denoise": "Limpiar ruido de referencia",
     "polish": "Pulir el audio generado",
     "basics": "1× es la velocidad normal. Deja la duración vacía para un ritmo natural.",
-    "hint": "Normalmente conviene usar los valores predeterminados. La guía ajusta la influencia de la indicación; los demás controles cambian cómo el modelo construye el sonido. Cambia uno a la vez."
+    "hint": "Normalmente conviene usar los valores predeterminados. La guía ajusta la influencia de la indicación; los demás controles cambian cómo el modelo construye el sonido. Cambia uno a la vez.",
+    "pauses_hint": "Añade silencio en las líneas en blanco. 0 mantiene el ritmo propio del motor."
   },
   "languagePicker": {
     "dialectFollowsVoice": "{{model}} tiene un solo modelo de {{language}}, así que el acento sigue a la voz de referencia.",

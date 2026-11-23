@@ -1624,7 +1624,8 @@
     "open": "Mở “{{name}}” và thay thế bản nháp hiện tại? Hãy lưu công việc trước.",
     "save_copy": "Lưu bản sao",
     "new": "Dự án mới",
-    "new_confirm": "Bắt đầu một dự án mới, trống? Các dự án đã lưu vẫn giữ nguyên; những thay đổi chưa lưu trong bản nháp hiện tại sẽ bị mất."
+    "new_confirm": "Bắt đầu một dự án mới, trống? Các dự án đã lưu vẫn giữ nguyên; những thay đổi chưa lưu trong bản nháp hiện tại sẽ bị mất.",
+    "delete_hint": "Chỉ dự án đã lưu bị xóa khỏi danh sách. Tệp phương tiện và giọng nói vẫn được giữ."
   },
   "sidebar": {
     "save_project": "Lưu dự án lồng tiếng",
@@ -2251,6 +2252,10 @@
     "dubbing_cta": "Chạy cái này trên video của riêng bạn →",
     "dubbing_loading": "Đang tải bản demo lồng tiếng…",
     "dubbing_dismiss": "Loại bỏ bản demo lồng tiếng",
+    "dubbing_download": "Tải video demo (~10 MB)",
+    "dubbing_downloading": "Đang tải xuống…",
+    "dubbing_download_failed": "Tải xuống thất bại. Hãy kiểm tra kết nối.",
+    "dubbing_retry": "Thử lại",
     "original_tag": "nguyên bản",
     "dubbed_tag": "được mệnh danh là",
     "script_conversational": "đàm thoại",
@@ -2938,7 +2943,8 @@
     "missingSpeech": "Lời nói bị thiếu hoặc không đọc được. Hãy tạo lại đoạn bị ảnh hưởng trước khi xuất.",
     "timingOverflow": "Lời nói vượt quá thời gian được phân bổ. Hãy rút ngắn bản dịch hoặc chọn khung thời gian nghiêm ngặt hay kéo dài video.",
     "sourceChanged": "Phụ đề đã thay đổi trong khi bản lồng tiếng này đang được tạo. Bản âm thanh trước được giữ nguyên; hãy tạo lại để dùng phụ đề mới.",
-    "backgroundUnavailable": "Không thể giữ âm thanh gốc. Hãy kiểm tra việc tách âm nền và thời gian hội thoại rồi thử lại, hoặc chọn chỉ xuất giọng nói."
+    "backgroundUnavailable": "Không thể giữ âm thanh gốc. Hãy kiểm tra việc tách âm nền và thời gian hội thoại rồi thử lại, hoặc chọn chỉ xuất giọng nói.",
+    "untranslated": "Bản này chưa được dịch: mọi dòng vẫn giống văn bản gốc. Hãy dịch hoặc chọn ngôn ngữ nguồn, rồi tạo lại."
   },
   "dubStyle": {
     "label": "Hướng dẫn phong cách dịch",
@@ -3355,7 +3361,8 @@
     "denoise": "Lọc nhiễu bản tham chiếu",
     "polish": "Trau chuốt âm thanh đã tạo",
     "basics": "1× là tốc độ bình thường. Để trống thời lượng để có nhịp tự nhiên.",
-    "hint": "Thường nên giữ giá trị mặc định. Độ dẫn hướng điều chỉnh ảnh hưởng của lời nhắc; các nút khác thay đổi cách mô hình tạo âm thanh. Mỗi lần chỉ đổi một mục."
+    "hint": "Thường nên giữ giá trị mặc định. Độ dẫn hướng điều chỉnh ảnh hưởng của lời nhắc; các nút khác thay đổi cách mô hình tạo âm thanh. Mỗi lần chỉ đổi một mục.",
+    "pauses_hint": "Thêm khoảng lặng ở dòng trống. 0 giữ nhịp riêng của công cụ."
   },
   "languagePicker": {
     "dialectFollowsVoice": "{{model}} chỉ có một mô hình {{language}}, nên giọng vùng miền theo giọng tham chiếu.",

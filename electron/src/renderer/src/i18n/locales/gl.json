@@ -1817,7 +1817,8 @@
     "open": "Queres abrir \"{{name}}\" e substituír o borrador actual? Garda primeiro o teu traballo actual.",
     "save_copy": "Garda unha copia",
     "new": "Novo proxecto",
-    "new_confirm": "Comezar un proxecto novo e baleiro? Os proxectos gardados non cambian; perderanse os cambios sen gardar do borrador actual."
+    "new_confirm": "Comezar un proxecto novo e baleiro? Os proxectos gardados non cambian; perderanse os cambios sen gardar do borrador actual.",
+    "delete_hint": "Só se elimina o proxecto gardado da lista. Consérvanse os ficheiros de audio e vídeo e as voces."
   },
   "sidebar": {
     "save_project": "Gardar proxecto de dobraxe",
@@ -2338,6 +2339,10 @@
     "dubbing_cta": "Executa isto no teu propio vídeo →",
     "dubbing_loading": "Cargando demostración de dobraxe…",
     "dubbing_dismiss": "Rexeitar a demostración de dobraxe",
+    "dubbing_download": "Descargar vídeos de demostración (~10 MB)",
+    "dubbing_downloading": "Descargando…",
+    "dubbing_download_failed": "A descarga fallou. Comproba a túa conexión.",
+    "dubbing_retry": "Reintentar",
     "original_tag": "orixinal",
     "dubbed_tag": "dobrado",
     "script_conversational": "Conversacional",
@@ -2938,7 +2943,8 @@
     "missingSpeech": "Falta o discurso ou non se pode lexir. Rexenera o segmento afectado antes de exportar.",
     "timingOverflow": "A fala supera a súa franxa horaria. Acurta a tradución ou escolle Slot Strict ou Stretch Video.",
     "sourceChanged": "Os subtítulos cambiaron mentres se procesaba esta dobraxe. Mantívose a pista anterior; xerar de novo para usar os novos subtítulos.",
-    "backgroundUnavailable": "Non se puido conservar o son orixinal. Comproba a separación en segundo plano e a sincronización dos diálogos, despois téntao de novo ou exporta explícitamente só a voz."
+    "backgroundUnavailable": "Non se puido conservar o son orixinal. Comproba a separación en segundo plano e a sincronización dos diálogos, despois téntao de novo ou exporta explícitamente só a voz.",
+    "untranslated": "Esta pista aínda non ten tradución: todas as liñas seguen iguais ao texto orixinal. Tradúcea ou escolle o idioma de orixe e xera de novo."
   },
   "dubStyle": {
     "label": "Indicador de estilo de tradución",
@@ -3355,7 +3361,8 @@
     "denoise": "Ruído de referencia limpo",
     "polish": "Audio xerado polaco",
     "basics": "1× é a velocidade normal. Deixa a duración en branco para o tempo natural.",
-    "hint": "Normalmente deixa estes predeterminado. A orientación axusta a influencia inmediata; os outros controis cambian como o modelo constrúe o son. Cambia un a un."
+    "hint": "Normalmente deixa estes predeterminado. A orientación axusta a influencia inmediata; os outros controis cambian como o modelo constrúe o son. Cambia un a un.",
+    "pauses_hint": "Engade silencio nas liñas en branco. 0 mantén o ritmo propio do motor."
   },
   "languagePicker": {
     "dialectFollowsVoice": "{{model}} ten un modelo {{language}}, polo que o acento segue a voz de referencia.",

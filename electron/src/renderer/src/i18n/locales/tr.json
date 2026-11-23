@@ -1624,7 +1624,8 @@
     "open": "“{{name}}” açılıp mevcut taslak değiştirilsin mi? Önce çalışmanızı kaydedin.",
     "save_copy": "Kopyasını kaydet",
     "new": "Yeni proje",
-    "new_confirm": "Yeni ve boş bir proje başlatılsın mı? Kayıtlı projeler olduğu gibi kalır; mevcut taslaktaki kaydedilmemiş değişiklikler kaybolur."
+    "new_confirm": "Yeni ve boş bir proje başlatılsın mı? Kayıtlı projeler olduğu gibi kalır; mevcut taslaktaki kaydedilmemiş değişiklikler kaybolur.",
+    "delete_hint": "Yalnızca kayıtlı proje listeden kaldırılır. Medya dosyaları ve sesler korunur."
   },
   "sidebar": {
     "save_project": "Dub Projesini Kaydet",
@@ -2251,6 +2252,10 @@
     "dubbing_cta": "Bunu kendi videonuzda çalıştırın →",
     "dubbing_loading": "Dublaj demosu yükleniyor…",
     "dubbing_dismiss": "Dublaj demosunu kapat",
+    "dubbing_download": "Demo videolarını indir (~10 MB)",
+    "dubbing_downloading": "İndiriliyor…",
+    "dubbing_download_failed": "İndirme başarısız. Bağlantınızı kontrol edin.",
+    "dubbing_retry": "Yeniden dene",
     "original_tag": "orijinal",
     "dubbed_tag": "dublajlı",
     "script_conversational": "konuşkan",
@@ -2938,7 +2943,8 @@
     "missingSpeech": "Konuşma eksik veya okunamıyor. Dışa aktarmadan önce ilgili bölümü yeniden oluşturun.",
     "timingOverflow": "Konuşma ayrılan süreyi aşıyor. Çeviriyi kısaltın veya kesin zaman aralığını ya da videoyu uzatmayı seçin.",
     "sourceChanged": "Bu dublaj oluşturulurken altyazılar değişti. Önceki parça korundu; yeni altyazıları kullanmak için yeniden oluşturun.",
-    "backgroundUnavailable": "Özgün ses korunamadı. Arka plan ayrımını ve diyalog zamanlarını kontrol edip yeniden deneyin veya yalnızca konuşmayı dışa aktarmayı seçin."
+    "backgroundUnavailable": "Özgün ses korunamadı. Arka plan ayrımını ve diyalog zamanlarını kontrol edip yeniden deneyin veya yalnızca konuşmayı dışa aktarmayı seçin.",
+    "untranslated": "Bu parçanın henüz çevirisi yok: tüm satırlar hâlâ kaynak metinle aynı. Çevirin veya kaynak dili seçin, ardından yeniden oluşturun."
   },
   "dubStyle": {
     "label": "Çeviri üslubu talimatları",
@@ -3355,7 +3361,8 @@
     "denoise": "Referans gürültüsünü temizle",
     "polish": "Üretilen sesi iyileştir",
     "basics": "1× normal hızdır. Doğal zamanlama için süreyi boş bırakın.",
-    "hint": "Genellikle varsayılanları koruyun. Yönlendirme istemin etkisini ayarlar; diğer kontroller modelin sesi oluşturma şeklini değiştirir. Her seferinde birini değiştirin."
+    "hint": "Genellikle varsayılanları koruyun. Yönlendirme istemin etkisini ayarlar; diğer kontroller modelin sesi oluşturma şeklini değiştirir. Her seferinde birini değiştirin.",
+    "pauses_hint": "Boş satırlarda sessizlik ekler. 0, motorun kendi temposunu korur."
   },
   "languagePicker": {
     "dialectFollowsVoice": "{{model}} için tek bir {{language}} modeli var, bu yüzden aksan referans sesi izler.",

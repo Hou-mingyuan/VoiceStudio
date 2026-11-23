@@ -1626,7 +1626,8 @@
     "open": "Ouvrir « {{name}} » et remplacer le brouillon actuel ? Enregistrez votre travail au préalable.",
     "save_copy": "Enregistrer une copie",
     "new": "Nouveau projet",
-    "new_confirm": "Commencer un nouveau projet vide ? Les projets enregistrés restent intacts ; les modifications non enregistrées du brouillon actuel seront perdues."
+    "new_confirm": "Commencer un nouveau projet vide ? Les projets enregistrés restent intacts ; les modifications non enregistrées du brouillon actuel seront perdues.",
+    "delete_hint": "Seul le projet enregistré est retiré de la liste. Les fichiers multimédias et les voix sont conservés."
   },
   "sidebar": {
     "save_project": "Enregistrer le projet de doublage",
@@ -2253,6 +2254,10 @@
     "dubbing_cta": "Exécutez ceci sur votre propre vidéo →",
     "dubbing_loading": "Chargement de la démo de doublage…",
     "dubbing_dismiss": "Ignorer la démo de doublage",
+    "dubbing_download": "Télécharger les vidéos de démo (~10 Mo)",
+    "dubbing_downloading": "Téléchargement…",
+    "dubbing_download_failed": "Échec du téléchargement. Vérifiez votre connexion.",
+    "dubbing_retry": "Réessayer",
     "original_tag": "originale",
     "dubbed_tag": "doublé",
     "script_conversational": "Conversationnel",
@@ -2940,7 +2945,8 @@
     "missingSpeech": "La parole est absente ou illisible. Régénérez le segment concerné avant l’exportation.",
     "timingOverflow": "La parole dépasse son créneau. Raccourcissez la traduction ou choisissez un créneau strict ou l’étirement vidéo.",
     "sourceChanged": "Les sous-titres ont changé pendant la génération de ce doublage. La piste précédente a été conservée ; relancez la génération pour utiliser les nouveaux sous-titres.",
-    "backgroundUnavailable": "Le son original n’a pas pu être préservé. Vérifiez la séparation du fond et les temps du dialogue, puis réessayez, ou exportez explicitement la voix seule."
+    "backgroundUnavailable": "Le son original n’a pas pu être préservé. Vérifiez la séparation du fond et les temps du dialogue, puis réessayez, ou exportez explicitement la voix seule.",
+    "untranslated": "Cette piste n'a pas encore de traduction : toutes les lignes sont identiques au texte source. Traduisez-la ou choisissez la langue source, puis relancez la génération."
   },
   "dubStyle": {
     "label": "Consignes de style de traduction",
@@ -3357,7 +3363,8 @@
     "denoise": "Nettoyer le bruit de référence",
     "polish": "Peaufiner l’audio généré",
     "basics": "1× est la vitesse normale. Laissez la durée vide pour un rythme naturel.",
-    "hint": "Gardez généralement les valeurs par défaut. Le guidage règle l’influence de la consigne ; les autres réglages modifient la construction du son. Changez un seul réglage à la fois."
+    "hint": "Gardez généralement les valeurs par défaut. Le guidage règle l’influence de la consigne ; les autres réglages modifient la construction du son. Changez un seul réglage à la fois.",
+    "pauses_hint": "Ajoute un silence aux lignes vides. 0 conserve le rythme propre du moteur."
   },
   "languagePicker": {
     "dialectFollowsVoice": "{{model}} n’a qu’un seul modèle ({{language}}) : l’accent suit la voix de référence.",

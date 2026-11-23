@@ -1624,7 +1624,8 @@
     "open": "打开“{{name}}”并替换当前草稿？请先保存当前工作。",
     "save_copy": "保存副本",
     "new": "新建项目",
-    "new_confirm": "新建一个空白项目？已保存的项目保持不变；当前草稿中未保存的更改将会丢失。"
+    "new_confirm": "新建一个空白项目？已保存的项目保持不变；当前草稿中未保存的更改将会丢失。",
+    "delete_hint": "仅从列表中移除已保存的项目。媒体文件和声音均保留。"
   },
   "sidebar": {
     "save_project": "保存配音项目",
@@ -2238,6 +2239,10 @@
     "dubbing_sync": "同步播放位置",
     "dubbing_loading": "正在加载配音演示...",
     "dubbing_dismiss": "关闭配音演示",
+    "dubbing_download": "下载演示视频（约 10 MB）",
+    "dubbing_downloading": "正在下载…",
+    "dubbing_download_failed": "下载失败，请检查网络连接。",
+    "dubbing_retry": "重试",
     "original_tag": "原创",
     "dubbed_tag": "配音",
     "script_conversational": "会话型",
@@ -2934,7 +2939,8 @@
     "missingSpeech": "语音缺失或无法读取。请在导出前重新生成受影响的片段。",
     "timingOverflow": "语音超出分配的时长。请缩短译文，或选择严格时间段或拉伸视频。",
     "sourceChanged": "生成此配音时字幕已更改。已保留之前的音轨；请重新生成以使用新字幕。",
-    "backgroundUnavailable": "无法保留原始声音。请检查背景音分离和对白时间后重试，或明确选择仅导出语音。"
+    "backgroundUnavailable": "无法保留原始声音。请检查背景音分离和对白时间后重试，或明确选择仅导出语音。",
+    "untranslated": "此轨道尚未翻译：所有行仍与源文本相同。请先翻译或选择源语言，然后重新生成。"
   },
   "dubStyle": {
     "label": "翻译风格提示词",
@@ -3351,7 +3357,8 @@
     "denoise": "清除参考音频噪声",
     "polish": "润色生成音频",
     "basics": "1× 为正常语速。时长留空可使用自然节奏。",
-    "hint": "通常建议保留默认值。引导强度控制提示词的影响，其他选项改变模型构建声音的方式。每次只调整一项。"
+    "hint": "通常建议保留默认值。引导强度控制提示词的影响，其他选项改变模型构建声音的方式。每次只调整一项。",
+    "pauses_hint": "在空行处加入静音。0 表示保持引擎自身的节奏。"
   },
   "languagePicker": {
     "dialectFollowsVoice": "{{model}} 只有一个{{language}}模型，因此口音取决于参考音色。",

@@ -1624,7 +1624,8 @@
     "open": "„{{name}}“ öffnen und den aktuellen Entwurf ersetzen? Speichere zuerst deine Arbeit.",
     "save_copy": "Kopie speichern",
     "new": "Neues Projekt",
-    "new_confirm": "Ein neues, leeres Projekt beginnen? Gespeicherte Projekte bleiben unverändert; ungespeicherte Änderungen am aktuellen Entwurf gehen verloren."
+    "new_confirm": "Ein neues, leeres Projekt beginnen? Gespeicherte Projekte bleiben unverändert; ungespeicherte Änderungen am aktuellen Entwurf gehen verloren.",
+    "delete_hint": "Nur das gespeicherte Projekt wird aus der Liste entfernt. Mediendateien und Stimmen bleiben erhalten."
   },
   "sidebar": {
     "save_project": "Dub-Projekt speichern",
@@ -2251,6 +2252,10 @@
     "dubbing_cta": "Führen Sie dies in Ihrem eigenen Video aus →",
     "dubbing_loading": "Synchronisationsdemo wird geladen…",
     "dubbing_dismiss": "Synchronisationsdemo schließen",
+    "dubbing_download": "Demovideos herunterladen (~10 MB)",
+    "dubbing_downloading": "Wird heruntergeladen…",
+    "dubbing_download_failed": "Download fehlgeschlagen. Prüfe deine Verbindung.",
+    "dubbing_retry": "Erneut versuchen",
     "original_tag": "Original",
     "dubbed_tag": "synchronisiert",
     "script_conversational": "Konversation",
@@ -2938,7 +2943,8 @@
     "missingSpeech": "Sprache fehlt oder ist nicht lesbar. Erzeuge das betroffene Segment vor dem Export erneut.",
     "timingOverflow": "Die Sprache überschreitet ihr Zeitfenster. Kürze die Übersetzung oder wähle ein festes Zeitfenster oder die Videostreckung.",
     "sourceChanged": "Die Untertitel haben sich während der Erstellung dieser Synchronisation geändert. Die vorherige Spur wurde beibehalten; erzeuge sie erneut, um die neuen Untertitel zu verwenden.",
-    "backgroundUnavailable": "Der Originalton konnte nicht erhalten werden. Prüfe Hintergrundtrennung und Dialogzeiten und versuche es erneut, oder exportiere ausdrücklich nur Sprache."
+    "backgroundUnavailable": "Der Originalton konnte nicht erhalten werden. Prüfe Hintergrundtrennung und Dialogzeiten und versuche es erneut, oder exportiere ausdrücklich nur Sprache.",
+    "untranslated": "Diese Spur hat noch keine Übersetzung: Alle Zeilen entsprechen noch dem Ausgangstext. Übersetze sie oder wähle die Ausgangssprache und erzeuge sie erneut."
   },
   "dubStyle": {
     "label": "Vorgabe für den Übersetzungsstil",
@@ -3355,7 +3361,8 @@
     "denoise": "Rauschen der Referenz entfernen",
     "polish": "Erzeugtes Audio verfeinern",
     "basics": "1× ist normale Geschwindigkeit. Für natürliches Timing die Dauer leer lassen.",
-    "hint": "Meist sind die Standardwerte passend. Die Vorgabe beeinflusst das Ergebnis; die anderen Regler ändern den Klangaufbau des Modells. Jeweils nur einen ändern."
+    "hint": "Meist sind die Standardwerte passend. Die Vorgabe beeinflusst das Ergebnis; die anderen Regler ändern den Klangaufbau des Modells. Jeweils nur einen ändern.",
+    "pauses_hint": "Fügt bei Leerzeilen Stille ein. 0 behält das Tempo der Engine bei."
   },
   "languagePicker": {
     "dialectFollowsVoice": "{{model}} hat ein einziges Modell für {{language}}, daher folgt der Akzent der Referenzstimme.",

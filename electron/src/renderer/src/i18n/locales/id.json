@@ -1624,7 +1624,8 @@
     "open": "Buka “{{name}}” dan ganti draf saat ini? Simpan pekerjaan Anda terlebih dahulu.",
     "save_copy": "Simpan salinan",
     "new": "Proyek baru",
-    "new_confirm": "Mulai proyek baru yang kosong? Proyek tersimpan tetap utuh; perubahan yang belum disimpan pada draf saat ini akan hilang."
+    "new_confirm": "Mulai proyek baru yang kosong? Proyek tersimpan tetap utuh; perubahan yang belum disimpan pada draf saat ini akan hilang.",
+    "delete_hint": "Hanya proyek tersimpan yang dihapus dari daftar. Berkas media dan suara tetap disimpan."
   },
   "sidebar": {
     "save_project": "Simpan Proyek Dub",
@@ -2251,6 +2252,10 @@
     "dubbing_cta": "Jalankan ini di video Anda sendiri →",
     "dubbing_loading": "Memuat demo sulih suara…",
     "dubbing_dismiss": "Tolak demo sulih suara",
+    "dubbing_download": "Unduh video demo (~10 MB)",
+    "dubbing_downloading": "Mengunduh…",
+    "dubbing_download_failed": "Unduhan gagal. Periksa koneksi Anda.",
+    "dubbing_retry": "Coba lagi",
     "original_tag": "asli",
     "dubbed_tag": "dijuluki",
     "script_conversational": "Percakapan",
@@ -2938,7 +2943,8 @@
     "missingSpeech": "Audio ucapan hilang atau tidak dapat dibaca. Buat ulang segmen terkait sebelum mengekspor.",
     "timingOverflow": "Ucapan melebihi jatah waktunya. Persingkat terjemahan atau pilih slot ketat atau rentangkan video.",
     "sourceChanged": "Subtitle berubah saat sulih suara ini sedang dibuat. Trek sebelumnya dipertahankan; buat ulang untuk memakai subtitle baru.",
-    "backgroundUnavailable": "Suara asli tidak dapat dipertahankan. Periksa pemisahan latar dan waktu dialog, lalu coba lagi, atau pilih ekspor suara saja."
+    "backgroundUnavailable": "Suara asli tidak dapat dipertahankan. Periksa pemisahan latar dan waktu dialog, lalu coba lagi, atau pilih ekspor suara saja.",
+    "untranslated": "Trek ini belum diterjemahkan: semua baris masih sama dengan teks sumber. Terjemahkan atau pilih bahasa sumber, lalu buat lagi."
   },
   "dubStyle": {
     "label": "Instruksi gaya terjemahan",
@@ -3355,7 +3361,8 @@
     "denoise": "Bersihkan derau referensi",
     "polish": "Sempurnakan audio yang dihasilkan",
     "basics": "1× adalah kecepatan normal. Kosongkan durasi untuk irama alami.",
-    "hint": "Biasanya biarkan nilai bawaan. Panduan mengatur pengaruh instruksi; kontrol lain mengubah cara model membentuk suara. Ubah satu per satu."
+    "hint": "Biasanya biarkan nilai bawaan. Panduan mengatur pengaruh instruksi; kontrol lain mengubah cara model membentuk suara. Ubah satu per satu.",
+    "pauses_hint": "Menambahkan jeda pada baris kosong. 0 mempertahankan tempo bawaan mesin."
   },
   "languagePicker": {
     "dialectFollowsVoice": "{{model}} hanya punya satu model {{language}}, jadi aksennya mengikuti suara referensi.",

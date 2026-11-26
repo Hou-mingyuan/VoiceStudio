@@ -2,7 +2,7 @@ import { translationActivity } from './translation-activity';
 import { ingestDubUrl, isDubUrl } from './dub-session';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
-import { apiJson } from '@/lib/api/client';
+import { ApiError, apiJson } from '@/lib/api/client';
 import { consumeTaskStream, IncompleteTaskStreamError } from '@/lib/api/event-stream';
 const diagnosticCapture = vi.hoisted(() => vi.fn());
 const preparedCapture = vi.hoisted(() => vi.fn());
@@ -53,6 +53,7 @@ it.each(['transport', 'too-large'] as const)('does not report local cookie %s va
 import {
   applyDubTranslationRows,
   replaceDubSegmentTexts,
+  restoreDubSegments,
   uploadDub,
   setDubProduction,
   setDubFitOptions,
@@ -644,6 +645,104 @@ it('a dropped preparation stream never advances to transcription or done', async
   expect(apiJson).not.toHaveBeenCalled();
 });
 
+it.each(['preparing', 'generating'] as const)(
+  'a resumed %s task the backend lost to a restart ends instead of reattaching (#4463)',
+  async (recovery) => {
+    const interrupted = 'Job was interrupted by a server restart.';
+    dubSession.setState((current) => ({
+      ...current,
+      jobId: 'lost-job',
+      taskId: 'lost-task',
+      phase: 'idle',
+      recovery,
+      error: null,
+      segments: [],
+    }));
+    vi.mocked(apiJson)
+      .mockReset()
+      .mockResolvedValueOnce({ id: 'lost-task', status: 'failed', error: interrupted })
+      .mockResolvedValueOnce({ id: 'lost-task', status: 'failed', error: interrupted });
+    vi.mocked(consumeTaskStream).mockClear().mockRejectedValueOnce(new IncompleteTaskStreamError());
+    await resumeDub();
+    expect(vi.mocked(apiJson).mock.calls.map((call) => call[0])).toEqual([
+      '/jobs/lost-task',
+      '/jobs/lost-task',
+    ]);
+    expect(dubSession.state).toMatchObject({
+      recovery: null,
+      taskId: null,
+      phase: 'idle',
+      error: interrupted,
+    });
+    // The way out is open again: a new source reaches the backend.
+    vi.mocked(apiJson).mockReset().mockRejectedValueOnce(new Error('fixture upload stop'));
+    await uploadDub(new File(['audio'], 'next.wav', { type: 'audio/wav' }));
+    expect(apiJson).toHaveBeenCalled();
+  },
+);
+
+it('a resumed task the backend cancelled while the stream was lost is no longer offered', async () => {
+  dubSession.setState((current) => ({
+    ...current,
+    jobId: 'gone-job',
+    taskId: 'gone-task',
+    phase: 'idle',
+    recovery: 'preparing',
+    error: null,
+  }));
+  vi.mocked(apiJson)
+    .mockReset()
+    .mockResolvedValueOnce({ status: 'running' })
+    .mockResolvedValueOnce({ status: 'cancelled' });
+  vi.mocked(consumeTaskStream).mockClear().mockRejectedValueOnce(new IncompleteTaskStreamError());
+  await resumeDub();
+  expect(dubSession.state).toMatchObject({ recovery: null, taskId: null });
+});
+
+it.each([
+  ['gone', new ApiError(404, 'No such job'), null],
+  ['unreachable', new TypeError('Failed to fetch'), 'preparing'],
+] as const)(
+  'an incomplete replay whose job record is %s keeps the stream error',
+  async (_label, recordError, recovery) => {
+    dubSession.setState((current) => ({
+      ...current,
+      jobId: 'unknown-job',
+      taskId: 'unknown-task',
+      phase: 'idle',
+      recovery: 'preparing',
+      error: null,
+    }));
+    vi.mocked(apiJson)
+      .mockReset()
+      .mockResolvedValueOnce({ status: 'running' })
+      .mockRejectedValueOnce(recordError);
+    vi.mocked(consumeTaskStream).mockClear().mockRejectedValueOnce(new IncompleteTaskStreamError());
+    await resumeDub();
+    expect(dubSession.state.recovery).toBe(recovery);
+    expect(dubSession.state.error).toContain('without a terminal event');
+  },
+);
+
+it('an incomplete replay of a task that may still be running stays resumable', async () => {
+  dubSession.setState((current) => ({
+    ...current,
+    jobId: 'busy-job',
+    taskId: 'busy-task',
+    phase: 'idle',
+    recovery: 'preparing',
+    error: null,
+  }));
+  vi.mocked(apiJson)
+    .mockReset()
+    .mockResolvedValueOnce({ status: 'running' })
+    .mockResolvedValueOnce({ status: 'running' });
+  vi.mocked(consumeTaskStream).mockClear().mockRejectedValueOnce(new IncompleteTaskStreamError());
+  await resumeDub();
+  expect(dubSession.state).toMatchObject({ recovery: 'preparing', taskId: 'busy-task' });
+  expect(dubSession.state.error).toContain('without a terminal event');
+});
+
 it('resumes the existing generation task instead of generating duplicate audio', async () => {
   vi.mocked(apiJson).mockClear().mockResolvedValueOnce({ status: 'done' });
   vi.mocked(consumeTaskStream)
@@ -1162,6 +1261,19 @@ it('echoes an imported cue only while no paste or edit has replaced its words (#
   setDubTarget('English', 'en');
   expect(dubSession.state.segments[0].text).toBe('Hello');
   expect(await generatedCueId()).toBe('imp:0');
+
+  reset();
+  editDubSegment('0', { text: 'Bye' });
+  restoreDubSegments();
+  expect(dubSession.state.segments[0].text).toBe('Hello');
+  expect(await generatedCueId()).toBe('imp:0');
+  // Restore Original also revives a row already edited back to the original.
+  reset();
+  editDubSegment('0', { text: 'Bye' });
+  editDubSegment('0', { text: 'Hello' });
+  expect(await generatedCueId()).toBeUndefined();
+  restoreDubSegments();
+  expect(await generatedCueId()).toBe('imp:0');
 });
 
 it('resetDubSession drops the loaded source but keeps production preferences', () => {
@@ -1417,4 +1529,19 @@ it('warns when a cached job has no background stem (#3751)', async () => {
   await uploadDub(new File(['audio'], 'voice.wav', { type: 'audio/wav' }));
   expect(warning.mock.calls.map((call) => call[0])).toEqual(['dub.bg_separation_failed']);
   warning.mockRestore();
+});
+
+
+it.each([restoreDubSegments, keepDubSourceText])('restores a deliberately blank source cue via %p', (restore) => {
+  dubSession.setState((current) => ({
+    ...current,
+    phase: 'editing',
+    recovery: null,
+    segments: [
+      { id: 'blank', start: 0, end: 1, text: 'Added translation', text_original: '' },
+      { id: 'old', start: 1, end: 2, text: 'Legacy cue' } as (typeof current.segments)[number],
+    ],
+  }));
+  restore();
+  expect(dubSession.state.segments.map((cue) => cue.text)).toEqual(['', 'Legacy cue']);
 });
